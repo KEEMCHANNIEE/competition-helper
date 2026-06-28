@@ -1,4 +1,4 @@
-# keenee — 기술 스펙 & 기능 명세 & 연결 지도 (구현자용 상세 가이드)
+# contest-helper — 기술 스펙 & 기능 명세 & 연결 지도 (구현자용 상세 가이드)
 
 - 작성일: 2026-06-28
 - 용도: 각 담당자가 **헤매지 않고** 구현할 수 있도록, 기술 스택·정확한 기능·고려사항·연결 관계를 한 장에 명시.
@@ -68,7 +68,7 @@ App DB: agent_jobs(상태) / recommendations(결과) / embeddings(RAG)
 
 ## 2. 데이터 계약 (역할 간 통신 규약 — 가장 중요)
 
-api와 worker는 아래 스키마로만 대화한다. `libs/keenee_core/schemas.py`에 정의.
+api와 worker는 아래 스키마로만 대화한다. `libs/contest_helper_core/schemas.py`에 정의.
 
 ```python
 # 큐에 들어가는 작업 (api → worker)
@@ -103,7 +103,7 @@ class CompetitionOut(BaseModel):
     url: str | None = None
 ```
 
-**DB 테이블 핵심 컬럼** (`libs/keenee_core/models.py`)
+**DB 테이블 핵심 컬럼** (`libs/contest_helper_core/models.py`)
 
 | 테이블 | 핵심 컬럼 | 비고 |
 |--------|-----------|------|
@@ -194,7 +194,7 @@ save_recommendations(payload.job_id, recos)
 
 ```dotenv
 # DB
-APP_DB_URL=postgresql+psycopg://keenee:keenee@db:5432/keenee
+APP_DB_URL=postgresql+psycopg://contest_helper:contest_helper@db:5432/contest_helper
 COMPETITION_DB_URL=postgresql+psycopg://readonly:pw@HOST:5432/competition   # 읽기전용
 # 큐
 REDIS_URL=redis://redis:6379/0

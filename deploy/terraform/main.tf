@@ -1,7 +1,7 @@
 # =============================================================================
 # main.tf — GCP 인프라를 코드로 정의 (GKE + Cloud SQL + Artifact Registry + VPC)
 # =============================================================================
-# 🟡 보너스 단계. 이 파일 하나로 keenee 를 운영할 클라우드 자원을 통째로 만든다.
+# 🟡 보너스 단계. 이 파일 하나로 contest-helper 를 운영할 클라우드 자원을 통째로 만든다.
 #   - VPC               : 자원들이 들어갈 사설 네트워크
 #   - Artifact Registry : 도커 이미지 저장소(CD 가 여기에 push)
 #   - GKE (Spot)        : 쿠버네티스 클러스터(저렴한 Spot e2-small 노드)
@@ -52,13 +52,13 @@ resource "google_project_service" "services" {
 # -----------------------------------------------------------------------------
 # 자원들이 통신할 사설 네트워크. auto 서브넷을 끄고 우리가 직접 하나 만든다.
 resource "google_compute_network" "vpc" {
-  name                    = "keenee-vpc"
+  name                    = "contest-helper-vpc"
   auto_create_subnetworks = false
   depends_on              = [google_project_service.services]
 }
 
 resource "google_compute_subnetwork" "subnet" {
-  name          = "keenee-subnet"
+  name          = "contest-helper-subnet"
   ip_cidr_range = "10.10.0.0/16" # 노드/내부 IP 대역
   region        = var.region
   network       = google_compute_network.vpc.id
@@ -84,7 +84,7 @@ resource "google_artifact_registry_repository" "docker" {
   location      = var.region
   repository_id = var.artifact_repo_id
   format        = "DOCKER"
-  description   = "keenee 컨테이너 이미지 저장소"
+  description   = "contest-helper 컨테이너 이미지 저장소"
   depends_on    = [google_project_service.services]
 }
 
@@ -138,7 +138,7 @@ resource "google_container_node_pool" "spot_nodes" {
 #     CREATE EXTENSION IF NOT EXISTS vector;
 #   를 실행해야 한다(우리 alembic 첫 마이그레이션이 담당하게 하면 자동화됨).
 resource "google_sql_database_instance" "postgres" {
-  name             = "keenee-pg"
+  name             = "contest-helper-pg"
   database_version = "POSTGRES_16"
   region           = var.region
 

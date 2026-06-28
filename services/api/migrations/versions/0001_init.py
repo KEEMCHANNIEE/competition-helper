@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from pgvector.sqlalchemy import Vector
 from alembic import op
 
-from keenee_core.models import EMBEDDING_DIM
+from contest_helper_core.models import EMBEDDING_DIM
 
 # revision identifiers, used by Alembic.
 revision: str = "0001_init"

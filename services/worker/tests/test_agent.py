@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from keenee_core.schemas import RecommendationOut, RecommendJobPayload
+from contest_helper_core.schemas import RecommendationOut, RecommendJobPayload
 from worker import agent
 
 

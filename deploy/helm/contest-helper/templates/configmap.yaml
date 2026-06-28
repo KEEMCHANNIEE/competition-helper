@@ -11,9 +11,9 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "keenee.configmapName" . }}
+  name: {{ include "contest-helper.configmapName" . }}
   labels:
-    {{- include "keenee.labels" . | nindent 4 }}
+    {{- include "contest-helper.labels" . | nindent 4 }}
 data:
   {{- range $key, $val := .Values.config }}
   # tpl: 값 안의 {{ ... }} 까지 렌더링(예: 릴리스명 기반 redis 호스트)

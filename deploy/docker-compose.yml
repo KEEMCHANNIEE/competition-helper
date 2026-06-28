@@ -1,5 +1,5 @@
 # =============================================================================
-# docker-compose.yml — 로컬에서 keenee 전체(api+worker+web+db+redis)를 한 번에 기동
+# docker-compose.yml — 로컬에서 contest-helper 전체(api+worker+web+db+redis)를 한 번에 기동
 # =============================================================================
 # 이 파일이 무엇인가:
 #   - 개발자 노트북에서 `docker compose up` 한 번으로 5개 컨테이너를 띄운다.
@@ -11,7 +11,7 @@
 #
 # ★ 빌드 컨텍스트 주의 ★
 #   이 파일은 deploy/ 안에 있다. 하지만 파이썬 이미지(api/worker)는 레포 루트를
-#   컨텍스트로 잡아야 libs/keenee_core 를 COPY 할 수 있다.
+#   컨텍스트로 잡아야 libs/contest_helper_core 를 COPY 할 수 있다.
 #   → 그래서 api/worker 의 build.context 는 ".."(= 레포 루트)로 지정한다.
 #
 # 사용법 (레포 루트의 .env 를 미리 채워둔 뒤, deploy/ 에서):
@@ -32,16 +32,16 @@ services:
     image: pgvector/pgvector:pg16
     environment:
       # 컨테이너가 처음 뜰 때 이 계정/DB 를 자동 생성한다.
-      POSTGRES_USER: keenee
-      POSTGRES_PASSWORD: keenee
-      POSTGRES_DB: keenee
+      POSTGRES_USER: contest_helper
+      POSTGRES_PASSWORD: contest_helper
+      POSTGRES_DB: contest_helper
     ports:
       - "5432:5432"  # 호스트에서 DB 툴로 직접 접속하고 싶을 때(선택)
     volumes:
       - db_data:/var/lib/postgresql/data  # 데이터 영속화(컨테이너 재생성해도 유지)
     healthcheck:
       # pg_isready 로 DB 가 실제 연결 가능한지 확인. api/worker 는 이게 healthy 여야 시작.
-      test: ["CMD-SHELL", "pg_isready -U keenee -d keenee"]
+      test: ["CMD-SHELL", "pg_isready -U contest_helper -d contest_helper"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -69,7 +69,7 @@ services:
     environment:
       # ★ 컨테이너 네트워크 안에서는 호스트명이 서비스명(db, redis)이다 ★
       #   (.env 의 localhost 값을 그대로 쓰면 컨테이너 안에서 연결 안 됨 → 여기서 덮어씀)
-      APP_DB_URL: postgresql+psycopg://keenee:keenee@db:5432/keenee
+      APP_DB_URL: postgresql+psycopg://contest_helper:contest_helper@db:5432/contest_helper
       REDIS_URL: redis://redis:6379/0
       # 아래는 .env 에서 주입(없으면 빈 값). 형식: ${VAR}
       COMPETITION_DB_URL: ${COMPETITION_DB_URL:-}
@@ -112,7 +112,7 @@ services:
       context: ..                      # ★ 레포 루트 컨텍스트(api 와 동일 이유)
       dockerfile: deploy/docker/worker.Dockerfile
     environment:
-      APP_DB_URL: postgresql+psycopg://keenee:keenee@db:5432/keenee
+      APP_DB_URL: postgresql+psycopg://contest_helper:contest_helper@db:5432/contest_helper
       REDIS_URL: redis://redis:6379/0
       COMPETITION_DB_URL: ${COMPETITION_DB_URL:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
@@ -121,7 +121,7 @@ services:
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_HOST: ${LANGFUSE_HOST:-}
-    command: ["uv", "run", "--no-dev", "--package", "keenee-worker", "python", "-m", "worker.main"]
+    command: ["uv", "run", "--no-dev", "--package", "contest-helper-worker", "python", "-m", "worker.main"]
     depends_on:
       db:
         condition: service_healthy

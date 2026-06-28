@@ -15,8 +15,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from keenee_core.models import AgentJob, Recommendation, User
-from keenee_core.schemas import JobResultOut, JobStatus, RecommendationOut
+from contest_helper_core.models import AgentJob, Recommendation, User
+from contest_helper_core.schemas import JobResultOut, JobStatus, RecommendationOut
 
 from app.deps import get_current_user, get_db, get_redis
 from app.queue import enqueue_recommend

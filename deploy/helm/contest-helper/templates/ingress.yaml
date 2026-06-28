@@ -8,15 +8,15 @@
 # 동작하려면 클러스터에 Ingress 컨트롤러(ingress-nginx 등)가 설치돼 있어야 한다.
 # (kind 에서는 별도 설치 필요 — README 참고)
 #
-# 테스트: /etc/hosts 에 "127.0.0.1 keenee.local" 추가 후 브라우저로 접속.
+# 테스트: /etc/hosts 에 "127.0.0.1 contest-helper.local" 추가 후 브라우저로 접속.
 # =============================================================================
 {{- if .Values.ingress.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "keenee.fullname" . }}
+  name: {{ include "contest-helper.fullname" . }}
   labels:
-    {{- include "keenee.labels" . | nindent 4 }}
+    {{- include "contest-helper.labels" . | nindent 4 }}
   {{- with .Values.ingress.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -32,7 +32,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "keenee.fullname" . }}-api
+                name: {{ include "contest-helper.fullname" . }}-api
                 port:
                   number: {{ .Values.service.api.port }}
           # 그 외 모든 요청(/)은 web(SPA)으로.
@@ -40,7 +40,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "keenee.fullname" . }}-web
+                name: {{ include "contest-helper.fullname" . }}-web
                 port:
                   number: {{ .Values.service.web.port }}
 {{- end }}

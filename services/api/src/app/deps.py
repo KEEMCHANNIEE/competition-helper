@@ -14,9 +14,9 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from keenee_core.config import get_settings
-from keenee_core.db import get_session
-from keenee_core.models import User
+from contest_helper_core.config import get_settings
+from contest_helper_core.db import get_session
+from contest_helper_core.models import User
 
 from app.auth.service import SESSION_COOKIE, read_session_token
 from app.competitions.repository import (
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 
 def get_db() -> Iterator[Session]:
-    """App DB 세션. keenee_core.db 의 세션 팩토리에 위임한다."""
+    """App DB 세션. contest_helper_core.db 의 세션 팩토리에 위임한다."""
     yield from get_session()
 
 

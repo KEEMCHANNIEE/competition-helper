@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # DB
-    app_db_url: str = "postgresql+psycopg://keenee:keenee@localhost:5432/keenee"
+    app_db_url: str = "postgresql+psycopg://contest_helper:contest_helper@localhost:5432/contest_helper"
     competition_db_url: str = ""
 
     # 큐

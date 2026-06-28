@@ -18,7 +18,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from keenee_core.models import (
+from contest_helper_core.models import (
     AgentJob,
     Base,
     Recommendation,
@@ -26,7 +26,7 @@ from keenee_core.models import (
     Workspace,
     WorkspaceMember,
 )
-from keenee_core.schemas import CompetitionOut
+from contest_helper_core.schemas import CompetitionOut
 
 from app.deps import (
     get_competition_repo,
@@ -93,7 +93,7 @@ def db_session(engine) -> Session:
 
 @pytest.fixture
 def test_user(db_session) -> User:
-    user = User(email="me@keenee.dev", name="테스터", interests=[], skills=[])
+    user = User(email="me@contest-helper.dev", name="테스터", interests=[], skills=[])
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)

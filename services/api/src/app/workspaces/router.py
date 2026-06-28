@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from keenee_core.models import User
+from contest_helper_core.models import User
 
 from app.deps import get_current_user, get_db
 from app.workspaces import service

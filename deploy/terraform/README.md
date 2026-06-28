@@ -1,6 +1,6 @@
-# keenee Terraform (GCP) — 초보자용 단계별 + 비용 절감 운영법
+# contest-helper Terraform (GCP) — 초보자용 단계별 + 비용 절감 운영법
 
-🟡 **보너스 단계.** GCP 에 keenee 운영용 인프라(GKE + Cloud SQL + Artifact
+🟡 **보너스 단계.** GCP 에 contest-helper 운영용 인프라(GKE + Cloud SQL + Artifact
 Registry + VPC)를 코드로 만든다. **돈이 나가는 영역**이므로 "켜고 → 쓰고 →
 반드시 끄기(destroy)" 흐름을 몸에 익히는 게 핵심이다.
 
@@ -42,7 +42,7 @@ gcloud config set project <YOUR_PROJECT_ID>
 (비밀번호 포함). `.gitignore` 에 `*.tfvars` 추가 권장.
 
 ```hcl
-project_id  = "my-keenee-123456"
+project_id  = "my-contest-helper-123456"
 region      = "asia-northeast3"
 zone        = "asia-northeast3-a"
 db_password = "강력한-비밀번호-여기"
@@ -88,9 +88,9 @@ docker push $REPO/api:v1
 # (worker, web 동일)
 
 # Helm 설치 시 이미지 repo/tag 와 DB URL 을 GKE 에 맞게 주입
-helm install keenee ../helm/keenee \
+helm install contest-helper ../helm/contest-helper \
   --set image.api.repository=$REPO/api --set image.api.tag=v1 \
-  --set secret.appDbUrl="postgresql+psycopg://keenee:<pw>@<sql_public_ip>:5432/keenee"
+  --set secret.appDbUrl="postgresql+psycopg://contest-helper:<pw>@<sql_public_ip>:5432/contest_helper"
 ```
 
 > pgvector: Cloud SQL 인스턴스에 접속해 `CREATE EXTENSION IF NOT EXISTS vector;`

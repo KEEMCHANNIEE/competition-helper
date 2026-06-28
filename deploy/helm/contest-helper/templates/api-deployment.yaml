@@ -12,20 +12,20 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "keenee.fullname" . }}-api
+  name: {{ include "contest-helper.fullname" . }}-api
   labels:
-    {{- include "keenee.labels" . | nindent 4 }}
+    {{- include "contest-helper.labels" . | nindent 4 }}
     app.kubernetes.io/component: api
 spec:
   replicas: {{ .Values.replicaCount.api }}
   selector:
     # 이 Deployment 가 관리할 Pod 를 고르는 라벨(아래 template.labels 와 일치해야 함)
     matchLabels:
-      {{- include "keenee.selectorLabels" (dict "ctx" . "component" "api") | nindent 6 }}
+      {{- include "contest-helper.selectorLabels" (dict "ctx" . "component" "api") | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "keenee.selectorLabels" (dict "ctx" . "component" "api") | nindent 8 }}
+        {{- include "contest-helper.selectorLabels" (dict "ctx" . "component" "api") | nindent 8 }}
     spec:
       containers:
         - name: api
@@ -43,9 +43,9 @@ spec:
           # 환경변수를 ConfigMap + Secret 에서 한꺼번에 주입.
           envFrom:
             - configMapRef:
-                name: {{ include "keenee.configmapName" . }}
+                name: {{ include "contest-helper.configmapName" . }}
             - secretRef:
-                name: {{ include "keenee.secretName" . }}
+                name: {{ include "contest-helper.secretName" . }}
           # liveness: 죽었으면(응답 없음) 컨테이너 재시작.
           livenessProbe:
             httpGet:

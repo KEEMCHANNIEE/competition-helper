@@ -1,1 +1,1 @@
-"""keenee api 서비스 패키지."""
+"""contest-helper api 서비스 패키지."""

@@ -1,6 +1,6 @@
 """공모전 DB(읽기 전용) 접근 계층.
 
-App DB 와 절대 엔진/세션을 공유하지 않는다(keenee_core.competition_db 사용).
+App DB 와 절대 엔진/세션을 공유하지 않는다(contest_helper_core.competition_db 사용).
 SQL 은 항상 파라미터 바인딩한다.
 """
 
@@ -11,8 +11,8 @@ from typing import Protocol
 
 from sqlalchemy import text
 
-from keenee_core.competition_db import competition_session_factory
-from keenee_core.schemas import CompetitionOut
+from contest_helper_core.competition_db import competition_session_factory
+from contest_helper_core.schemas import CompetitionOut
 
 
 class CompetitionRepository(Protocol):

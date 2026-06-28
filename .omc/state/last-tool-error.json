@@ -1,6 +1,6 @@
 {
   "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"python3 -c \\\"\\nimport yaml, sys\\nfor f in ['deploy/docker-compose.yml', '.github/workflows/ci.yml', '.github/workflows/cd.yml', 'deploy/helm/keenee/Chart.yaml', 'deploy/helm/keenee/values....",
+  "tool_input_preview": "{\"command\":\"python3 -c \\\"\\nimport yaml, sys\\nfor f in ['deploy/docker-compose.yml', '.github/workflows/ci.yml', '.github/workflows/cd.yml', 'deploy/helm/contest-helper/Chart.yaml', 'deploy/helm/contest-helper/values....",
   "error": "Exit code 1\nTraceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nModuleNotFoundError: No module named 'yaml'",
   "timestamp": "2026-06-28T14:20:45.806Z",
   "retry_count": 1

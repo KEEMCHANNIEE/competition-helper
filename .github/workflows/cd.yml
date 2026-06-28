@@ -18,10 +18,10 @@ on:
 # --- 환경값(아래 placeholder 를 실제 값/시크릿으로 교체) ---
 env:
   # GCP 프로젝트/리전/레지스트리 (시크릿 또는 변수로 관리 권장)
-  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}        # 예: my-keenee-123456
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}        # 예: my-contest-helper-123456
   GCP_REGION: ${{ secrets.GCP_REGION }}                # 예: asia-northeast3
-  ARTIFACT_REPO: ${{ secrets.GCP_ARTIFACT_REPO }}      # 예: keenee
-  GKE_CLUSTER: ${{ secrets.GKE_CLUSTER }}              # 예: keenee-gke
+  ARTIFACT_REPO: ${{ secrets.GCP_ARTIFACT_REPO }}      # 예: contest-helper
+  GKE_CLUSTER: ${{ secrets.GKE_CLUSTER }}              # 예: contest-helper-gke
   GKE_ZONE: ${{ secrets.GKE_ZONE }}                    # 예: asia-northeast3-a
 
 jobs:
@@ -96,7 +96,7 @@ jobs:
           REG="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}"
           TAG="${{ steps.vars.outputs.sha }}"
 
-          helm upgrade --install keenee deploy/helm/keenee \
+          helm upgrade --install contest-helper deploy/helm/contest-helper \
             --set image.api.repository="$REG/api"       --set image.api.tag="$TAG" \
             --set image.worker.repository="$REG/worker" --set image.worker.tag="$TAG" \
             --set image.web.repository="$REG/web"       --set image.web.tag="$TAG" \

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 @lru_cache
 def get_competition_engine() -> Engine:
-    from keenee_core.config import get_settings
+    from contest_helper_core.config import get_settings
 
     return create_engine(get_settings().competition_db_url, pool_pre_ping=True)
 

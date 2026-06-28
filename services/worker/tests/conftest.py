@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from keenee_core.models import AgentJob, Base, Recommendation, User
+from contest_helper_core.models import AgentJob, Base, Recommendation, User
 
 
 @pytest.fixture()
@@ -70,7 +70,7 @@ def fake_redis() -> FakeRedis:
 def seed_user(session_factory: sessionmaker[Session]) -> int:
     """추천이 매달릴 사용자 1명을 만든다."""
     with session_factory() as session:
-        user = User(email="tester@keenee.io", name="Tester", interests=["AI"], skills=["python"])
+        user = User(email="tester@contest-helper.io", name="Tester", interests=["AI"], skills=["python"])
         session.add(user)
         session.commit()
         return user.id

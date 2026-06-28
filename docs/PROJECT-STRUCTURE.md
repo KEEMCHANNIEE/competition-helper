@@ -1,4 +1,4 @@
-# keenee — 전체 구조 & 파일별 정의 & 역할 분담 (과제 출제용)
+# contest-helper — 전체 구조 & 파일별 정의 & 역할 분담 (과제 출제용)
 
 - 작성일: 2026-06-28
 - 용도: **과제 출제자가 전체 골격을 미리 잡고, 일부를 비워 "채우기" 과제로 분배**하기 위한 설계도.
@@ -10,19 +10,19 @@
 | 태그 | 담당 | 인원 | 주 소유 영역 |
 |------|------|------|-------------|
 | 🟦 FE | 프론트엔드 | 1 | `services/web/` |
-| 🟩 BE | 백엔드 + 배포환경 | 1 | `services/api/`, `libs/keenee_core/`(공유 소유), `deploy/`, `.github/`, 마이그레이션 |
+| 🟩 BE | 백엔드 + 배포환경 | 1 | `services/api/`, `libs/contest_helper_core/`(공유 소유), `deploy/`, `.github/`, 마이그레이션 |
 | 🟨 AI | AI Agent 개발 | 2 | `services/worker/`(에이전트·LLM·RAG·MCP 도구·임베딩) |
 
-> **계약 지점(seam):** `libs/keenee_core/`(모델·DB·공유 스키마)와 `services/api/src/app/recommend/`(요청 접수↔워커)는 **여러 역할이 공유**한다. 여기 인터페이스를 먼저 고정하면 각자 빈칸을 병렬로 채울 수 있다. 이 파일들은 비우지 말고 **출제자가 채워서 제공**하는 것을 권장.
+> **계약 지점(seam):** `libs/contest_helper_core/`(모델·DB·공유 스키마)와 `services/api/src/app/recommend/`(요청 접수↔워커)는 **여러 역할이 공유**한다. 여기 인터페이스를 먼저 고정하면 각자 빈칸을 병렬로 채울 수 있다. 이 파일들은 비우지 말고 **출제자가 채워서 제공**하는 것을 권장.
 
 ---
 
 ## 전체 폴더 트리 (소유 태그 포함)
 
 ```
-keenee/
-├── libs/keenee_core/            🟩(공유)  ← 계약 계층: 모델·DB·스키마·설정
-│   └── src/keenee_core/
+contest-helper/
+├── libs/contest_helper_core/            🟩(공유)  ← 계약 계층: 모델·DB·스키마·설정
+│   └── src/contest_helper_core/
 │       ├── __init__.py
 │       ├── config.py
 │       ├── db.py
@@ -60,7 +60,7 @@ keenee/
 │       └── Dockerfile
 ├── deploy/                      🟩
 │   ├── docker-compose.yml
-│   ├── helm/keenee/ (Chart.yaml, values.yaml, templates/)
+│   ├── helm/contest-helper/ (Chart.yaml, values.yaml, templates/)
 │   └── terraform/ (main.tf, variables.tf, outputs.tf)
 ├── .github/workflows/ (ci.yml, cd.yml)   🟩
 ├── docs/
@@ -69,7 +69,7 @@ keenee/
 
 ---
 
-## 🟩 BE(공유) — `libs/keenee_core/`  (계약 계층, 출제자가 채워 제공 권장)
+## 🟩 BE(공유) — `libs/contest_helper_core/`  (계약 계층, 출제자가 채워 제공 권장)
 
 | 파일 | 정의할 것 |
 |------|-----------|
@@ -94,10 +94,10 @@ keenee/
 | `competitions/repository.py` | 공모전 DB 읽기. `list_open(limit)` 등. **실제 테이블/컬럼명 치환 필요(C3).** |
 | `competitions/router.py` | `GET /competitions?limit=` → `list[CompetitionOut]`. |
 | `recommend/router.py` | 🟩↔🟨 **계약.** `POST /recommend`(요청 접수→enqueue→job_id 반환), `GET /recommend/{job_id}`(상태·결과 폴링). |
-| `recommend/schemas.py` | 요청/응답 스키마(필요 시 keenee_core.schemas 재노출). |
+| `recommend/schemas.py` | 요청/응답 스키마(필요 시 contest_helper_core.schemas 재노출). |
 | `workspaces/router.py` | 팀 생성·멤버 초대·역할, 추천을 팀에 저장·조회. |
 | `workspaces/service.py` | 워크스페이스/멤버십 비즈니스 로직. |
-| `migrations/env.py` | Alembic ← `keenee_core.models.Base.metadata`, URL은 settings에서. |
+| `migrations/env.py` | Alembic ← `contest_helper_core.models.Base.metadata`, URL은 settings에서. |
 | `migrations/versions/` | `0001_users`, `0002_workspaces_jobs_recos`, `0003_embeddings` ... |
 | `Dockerfile` | python:3.12-slim + uv, 마이그레이션 후 uvicorn 기동. |
 
@@ -142,8 +142,8 @@ keenee/
 | 파일 | 정의할 것 |
 |------|-----------|
 | `deploy/docker-compose.yml` | 로컬 전체 기동: `api`+`worker`+`redis`+`pgvector`. 마이그레이션 자동 적용. |
-| `deploy/helm/keenee/Chart.yaml`,`values.yaml` | 차트 메타·이미지 태그·env·리소스. |
-| `deploy/helm/keenee/templates/` | `Deployment`(api/worker/web), `Service`, `Ingress`, `ConfigMap/Secret`, (`hpa`⚪). |
+| `deploy/helm/contest-helper/Chart.yaml`,`values.yaml` | 차트 메타·이미지 태그·env·리소스. |
+| `deploy/helm/contest-helper/templates/` | `Deployment`(api/worker/web), `Service`, `Ingress`, `ConfigMap/Secret`, (`hpa`⚪). |
 | `deploy/terraform/main.tf` 등 🟡 | GKE·Cloud SQL(pgvector)·네트워크·Artifact Registry. `variables.tf`/`outputs.tf`. |
 | `.github/workflows/ci.yml` | ruff 린트 + pytest(서비스별) 게이트. |
 | `.github/workflows/cd.yml` | 빌드→이미지 푸시(Artifact Registry)→배포. |
@@ -152,7 +152,7 @@ keenee/
 
 ## "비워서 과제로 주기" 가이드
 
-- **고정(채워서 제공):** `libs/keenee_core/`(특히 `models.py`,`schemas.py`)와 `recommend/` 계약 — 인터페이스가 흔들리면 모두가 막힘.
+- **고정(채워서 제공):** `libs/contest_helper_core/`(특히 `models.py`,`schemas.py`)와 `recommend/` 계약 — 인터페이스가 흔들리면 모두가 막힘.
 - **빈칸 후보(역할별 과제):**
   - 🟦 FE: `pages/Recommend`의 폴링 로직, `pages/Workspace`
   - 🟩 BE: `competitions/repository.py`의 실제 SQL, `auth/oauth.py`, `queue.py`, helm 템플릿

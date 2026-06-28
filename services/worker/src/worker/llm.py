@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from keenee_core.config import Settings, get_settings
+from contest_helper_core.config import Settings, get_settings
 
 
 class LLMClient(ABC):

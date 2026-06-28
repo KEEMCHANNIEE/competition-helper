@@ -1,10 +1,10 @@
 [project]
-name = "keenee-worker"
+name = "contest-helper-worker"
 version = "0.0.0"
-description = "keenee agent-worker: 비동기 LLM 에이전트 런타임 (큐 소비·추천 생성)"
+description = "contest-helper agent-worker: 비동기 LLM 에이전트 런타임 (큐 소비·추천 생성)"
 requires-python = ">=3.12"
 dependencies = [
-    "keenee-core",
+    "contest-helper-core",
     "redis>=5",
     "google-genai>=0.3",
 ]
@@ -21,9 +21,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/worker"]
 
-# uv workspace: 공유 계약 계층(keenee_core)을 로컬 멤버로 해석.
+# uv workspace: 공유 계약 계층(contest_helper_core)을 로컬 멤버로 해석.
 [tool.uv.sources]
-keenee-core = { workspace = true }
+contest-helper-core = { workspace = true }
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

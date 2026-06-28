@@ -1,4 +1,4 @@
-"""keenee agent-worker.
+"""contest-helper agent-worker.
 
 비동기 LLM 에이전트 런타임. Redis 큐에서 추천 작업을 꺼내
 에이전트를 돌리고 결과를 App DB 에 적재한다.

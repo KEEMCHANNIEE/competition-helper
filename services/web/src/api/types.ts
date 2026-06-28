@@ -1,4 +1,4 @@
-// keenee_core/schemas.py 의 DTO 와 1:1 로 일치시킨 TypeScript 타입.
+// contest_helper_core/schemas.py 의 DTO 와 1:1 로 일치시킨 TypeScript 타입.
 // 필드 이름/널 허용 여부를 백엔드 계약과 정확히 맞춘다.
 
 /** 추천 작업 상태. JobStatus(str, Enum) 과 동일. */

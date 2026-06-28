@@ -25,7 +25,7 @@ jobs:
       fail-fast: false # 한 서비스가 실패해도 다른 서비스 검사는 계속
       matrix:
         # uv workspace 의 패키지 이름. 둘을 각각 검사한다.
-        service: [keenee-api, keenee-worker]
+        service: [contest-helper-api, contest-helper-worker]
     steps:
       - uses: actions/checkout@v4
 
@@ -39,7 +39,7 @@ jobs:
         run: uv python install 3.12
 
       # 개발 의존성 포함 설치(테스트/린트 도구 필요).
-      # 워크스페이스 루트에서 한 번에 동기화하면 keenee-core 도 함께 풀린다.
+      # 워크스페이스 루트에서 한 번에 동기화하면 contest-helper-core 도 함께 풀린다.
       - name: Sync dependencies
         run: uv sync --dev
 

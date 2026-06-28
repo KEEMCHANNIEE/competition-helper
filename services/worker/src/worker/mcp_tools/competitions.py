@@ -2,7 +2,7 @@
 
 TODO(AI 담당): 이 모듈을 구현해 아래 테스트를 통과시킬 것.
 
-공모전 DB 는 읽기 전용. ``keenee_core.competition_db.competition_session_factory`` 로
+공모전 DB 는 읽기 전용. ``contest_helper_core.competition_db.competition_session_factory`` 로
 세션을 얻고, SQL 은 항상 파라미터 바인딩한다(인젝션 금지).
 실제 테이블/컬럼명은 소스 DB 에 맞춰 치환 필요(C3).
 """
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from keenee_core.schemas import CompetitionOut
+from contest_helper_core.schemas import CompetitionOut
 
 
 def search_competitions(

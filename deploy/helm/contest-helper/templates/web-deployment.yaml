@@ -9,19 +9,19 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "keenee.fullname" . }}-web
+  name: {{ include "contest-helper.fullname" . }}-web
   labels:
-    {{- include "keenee.labels" . | nindent 4 }}
+    {{- include "contest-helper.labels" . | nindent 4 }}
     app.kubernetes.io/component: web
 spec:
   replicas: {{ .Values.replicaCount.web }}
   selector:
     matchLabels:
-      {{- include "keenee.selectorLabels" (dict "ctx" . "component" "web") | nindent 6 }}
+      {{- include "contest-helper.selectorLabels" (dict "ctx" . "component" "web") | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "keenee.selectorLabels" (dict "ctx" . "component" "web") | nindent 8 }}
+        {{- include "contest-helper.selectorLabels" (dict "ctx" . "component" "web") | nindent 8 }}
     spec:
       containers:
         - name: web

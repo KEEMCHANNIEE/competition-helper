@@ -15,17 +15,17 @@ kind: Deployment
 metadata:
   name: {{ .Release.Name }}-redis
   labels:
-    {{- include "keenee.labels" . | nindent 4 }}
+    {{- include "contest-helper.labels" . | nindent 4 }}
     app.kubernetes.io/component: redis
 spec:
   replicas: 1
   selector:
     matchLabels:
-      {{- include "keenee.selectorLabels" (dict "ctx" . "component" "redis") | nindent 6 }}
+      {{- include "contest-helper.selectorLabels" (dict "ctx" . "component" "redis") | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "keenee.selectorLabels" (dict "ctx" . "component" "redis") | nindent 8 }}
+        {{- include "contest-helper.selectorLabels" (dict "ctx" . "component" "redis") | nindent 8 }}
     spec:
       containers:
         - name: redis
@@ -53,12 +53,12 @@ metadata:
   # ★ 이름이 정확히 "<릴리스>-redis" 여야 REDIS_URL 과 맞는다 ★
   name: {{ .Release.Name }}-redis
   labels:
-    {{- include "keenee.labels" . | nindent 4 }}
+    {{- include "contest-helper.labels" . | nindent 4 }}
     app.kubernetes.io/component: redis
 spec:
   type: ClusterIP
   selector:
-    {{- include "keenee.selectorLabels" (dict "ctx" . "component" "redis") | nindent 4 }}
+    {{- include "contest-helper.selectorLabels" (dict "ctx" . "component" "redis") | nindent 4 }}
   ports:
     - name: redis
       port: 6379

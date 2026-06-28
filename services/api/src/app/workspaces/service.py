@@ -9,7 +9,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from keenee_core.models import (
+from contest_helper_core.models import (
     Recommendation,
     User,
     Workspace,

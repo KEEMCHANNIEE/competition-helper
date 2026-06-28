@@ -1,6 +1,6 @@
 """Alembic 환경 설정.
 
-target_metadata 는 공유 계약(keenee_core.models.Base)에서, DB URL 은
+target_metadata 는 공유 계약(contest_helper_core.models.Base)에서, DB URL 은
 설정(get_settings().app_db_url)에서 가져온다. 마이그레이션은 App DB 만 대상.
 """
 
@@ -11,8 +11,8 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from keenee_core.config import get_settings
-from keenee_core.models import Base
+from contest_helper_core.config import get_settings
+from contest_helper_core.models import Base
 
 config = context.config
 

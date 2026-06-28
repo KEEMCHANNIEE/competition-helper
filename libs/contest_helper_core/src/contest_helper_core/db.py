@@ -6,7 +6,7 @@ from functools import lru_cache
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from keenee_core.config import get_settings
+from contest_helper_core.config import get_settings
 
 
 @lru_cache

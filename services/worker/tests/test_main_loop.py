@@ -8,8 +8,8 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from keenee_core.models import AgentJob, Recommendation
-from keenee_core.schemas import JobStatus, RecommendationOut, RecommendJobPayload
+from contest_helper_core.models import AgentJob, Recommendation
+from contest_helper_core.schemas import JobStatus, RecommendationOut, RecommendJobPayload
 from worker import main
 from worker.main import QUEUE_KEY, handle_job, run_loop
 
@@ -144,4 +144,4 @@ def test_run_loop_handles_empty_queue_without_error(session_factory, fake_redis)
 
 def test_queue_key_matches_contract():
     # api 와 worker 가 같은 키를 써야 작업이 흐른다.
-    assert main.QUEUE_KEY == "keenee:jobs:recommend"
+    assert main.QUEUE_KEY == "contest-helper:jobs:recommend"

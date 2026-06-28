@@ -10,7 +10,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from keenee_core.models import User
+from contest_helper_core.models import User
 
 from app.auth import oauth, service
 from app.deps import get_current_user, get_db
@@ -18,7 +18,7 @@ from app.deps import get_current_user, get_db
 router = APIRouter(tags=["auth"])
 
 # 로그인 시작 시 발급한 CSRF state 를 잠깐 담아두는 쿠키.
-_STATE_COOKIE = "keenee_oauth_state"
+_STATE_COOKIE = "contest-helper_oauth_state"
 
 
 class UserOut(BaseModel):

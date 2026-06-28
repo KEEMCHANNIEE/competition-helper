@@ -11,14 +11,14 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from keenee_core.models import AgentJob
-from keenee_core.schemas import RecommendJobPayload
+from contest_helper_core.models import AgentJob
+from contest_helper_core.schemas import RecommendJobPayload
 
 if TYPE_CHECKING:
     from redis import Redis
 
 # worker 가 소비하는 추천 작업 리스트 키. 절대 변경 금지(계약).
-RECOMMEND_QUEUE_KEY = "keenee:jobs:recommend"
+RECOMMEND_QUEUE_KEY = "contest-helper:jobs:recommend"
 
 
 def enqueue_recommend(

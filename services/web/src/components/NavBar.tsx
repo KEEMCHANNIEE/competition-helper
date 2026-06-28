@@ -10,7 +10,7 @@ export function NavBar({ user }: NavBarProps) {
   return (
     <nav className="navbar">
       <NavLink to="/recommend" className="navbar__brand">
-        keenee
+        contest-helper
       </NavLink>
       <div className="navbar__links">
         <NavLink to="/recommend">추천</NavLink>

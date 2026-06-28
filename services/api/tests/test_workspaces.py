@@ -1,4 +1,4 @@
-from keenee_core.models import Recommendation, User
+from contest_helper_core.models import Recommendation, User
 
 
 def test_create_workspace(client):
@@ -22,7 +22,7 @@ def test_get_workspace_missing_404(client):
 
 def test_add_member_and_attach_recommendations(client, db_session, test_user):
     # 초대 대상 사용자 준비.
-    other = User(email="other@keenee.dev", name="동료", interests=[], skills=[])
+    other = User(email="other@contest-helper.dev", name="동료", interests=[], skills=[])
     db_session.add(other)
     # 추천 1건(현재 유저 소유) 준비.
     reco = Recommendation(
@@ -41,13 +41,13 @@ def test_add_member_and_attach_recommendations(client, db_session, test_user):
     # owner 가 멤버 초대.
     m = client.post(
         f"/workspaces/{ws_id}/members",
-        json={"email": "other@keenee.dev", "role": "member"},
+        json={"email": "other@contest-helper.dev", "role": "member"},
     )
     assert m.status_code == 201
 
     # 중복 초대는 409.
     dup = client.post(
-        f"/workspaces/{ws_id}/members", json={"email": "other@keenee.dev"}
+        f"/workspaces/{ws_id}/members", json={"email": "other@contest-helper.dev"}
     )
     assert dup.status_code == 409
 
@@ -68,6 +68,6 @@ def test_add_member_and_attach_recommendations(client, db_session, test_user):
 def test_add_member_unknown_email_404(client):
     ws_id = client.post("/workspaces", json={"name": "팀A"}).json()["id"]
     resp = client.post(
-        f"/workspaces/{ws_id}/members", json={"email": "ghost@keenee.dev"}
+        f"/workspaces/{ws_id}/members", json={"email": "ghost@contest-helper.dev"}
     )
     assert resp.status_code == 404

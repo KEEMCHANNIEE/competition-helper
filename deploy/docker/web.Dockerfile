@@ -1,5 +1,5 @@
 # =============================================================================
-# web.Dockerfile — keenee의 React SPA(프론트엔드) 이미지
+# web.Dockerfile — contest-helper의 React SPA(프론트엔드) 이미지
 # =============================================================================
 # 이 파일이 무엇인가:
 #   - services/web (React + Vite + TypeScript) 를 "빌드"한 뒤,
@@ -9,7 +9,7 @@
 #
 # ★ 빌드 컨텍스트 주의 ★
 #   web 은 파이썬 워크스페이스와 무관하므로 컨텍스트를 services/web 으로 잡는 게 간단하다.
-#       docker build -f deploy/docker/web.Dockerfile -t keenee-web services/web
+#       docker build -f deploy/docker/web.Dockerfile -t contest-helper-web services/web
 #   (compose 에서는 build.context: ../services/web 으로 지정)
 # =============================================================================
 

@@ -9,7 +9,7 @@
 # =============================================================================
 
 variable "project_id" {
-  description = "GCP 프로젝트 ID (예: my-keenee-123456). $300 무료 크레딧 프로젝트 권장."
+  description = "GCP 프로젝트 ID (예: my-contest-helper-123456). $300 무료 크레딧 프로젝트 권장."
   type        = string
 }
 
@@ -28,7 +28,7 @@ variable "zone" {
 variable "cluster_name" {
   description = "GKE 클러스터 이름."
   type        = string
-  default     = "keenee-gke"
+  default     = "contest-helper-gke"
 }
 
 # --- 비용 절감 핵심: 작은 Spot 노드 ---
@@ -60,13 +60,13 @@ variable "db_tier" {
 variable "db_name" {
   description = "생성할 App DB 이름."
   type        = string
-  default     = "keenee"
+  default     = "contest_helper"
 }
 
 variable "db_user" {
   description = "App DB 사용자."
   type        = string
-  default     = "keenee"
+  default     = "contest_helper"
 }
 
 variable "db_password" {
@@ -79,5 +79,5 @@ variable "db_password" {
 variable "artifact_repo_id" {
   description = "Artifact Registry 도커 저장소 이름."
   type        = string
-  default     = "keenee"
+  default     = "contest_helper"
 }

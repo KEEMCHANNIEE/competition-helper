@@ -7,14 +7,14 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "keenee.fullname" . }}-web
+  name: {{ include "contest-helper.fullname" . }}-web
   labels:
-    {{- include "keenee.labels" . | nindent 4 }}
+    {{- include "contest-helper.labels" . | nindent 4 }}
     app.kubernetes.io/component: web
 spec:
   type: {{ .Values.service.web.type }}
   selector:
-    {{- include "keenee.selectorLabels" (dict "ctx" . "component" "web") | nindent 4 }}
+    {{- include "contest-helper.selectorLabels" (dict "ctx" . "component" "web") | nindent 4 }}
   ports:
     - name: http
       port: {{ .Values.service.web.port }}

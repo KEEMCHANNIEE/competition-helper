@@ -8,7 +8,7 @@ TODO(AI 담당): 이 모듈을 구현해 아래 테스트를 통과시킬 것.
 
 from __future__ import annotations
 
-from keenee_core.schemas import CompetitionOut
+from contest_helper_core.schemas import CompetitionOut
 
 
 def semantic_search(query: str, k: int = 5) -> list[CompetitionOut]:

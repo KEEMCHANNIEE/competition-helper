@@ -11,7 +11,7 @@ from app.workspaces.router import router as workspaces_router
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="keenee api", version="0.0.0")
+    app = FastAPI(title="contest-helper api", version="0.0.0")
 
     @app.get("/health", tags=["health"])
     def health() -> dict[str, str]:

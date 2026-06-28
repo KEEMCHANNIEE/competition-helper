@@ -19,20 +19,20 @@ fullnameOverride: ""
 # -----------------------------------------------------------------------------
 # 이미지 설정: 서비스별 레지스트리/태그
 # -----------------------------------------------------------------------------
-# repository = 이미지 주소. 로컬(kind)에서는 keenee-api 처럼 짧게,
+# repository = 이미지 주소. 로컬(kind)에서는 contest-helper-api 처럼 짧게,
 #              GKE 에서는 Artifact Registry 전체 경로로 바꾼다(예:
-#              asia-northeast3-docker.pkg.dev/PROJECT/keenee/api).
+#              asia-northeast3-docker.pkg.dev/PROJECT/contest-helper/api).
 # tag = 보통 git 커밋 SHA (CD 가 --set 으로 주입).
 image:
   pullPolicy: IfNotPresent   # 같은 태그면 다시 안 받음. dev 에서 latest 쓰면 Always 권장.
   api:
-    repository: keenee-api
+    repository: contest-helper-api
     tag: "latest"
   worker:
-    repository: keenee-worker
+    repository: contest-helper-worker
     tag: "latest"
   web:
-    repository: keenee-web
+    repository: contest-helper-web
     tag: "latest"
 
 # -----------------------------------------------------------------------------
@@ -83,7 +83,7 @@ config:
 secret:
   create: true
   # DB 접속 URL 들(비밀번호 포함 → 비밀로 취급)
-  appDbUrl: "postgresql+psycopg://keenee:keenee@HOST:5432/keenee"
+  appDbUrl: "postgresql+psycopg://contest_helper:contest_helper@HOST:5432/contest_helper"
   competitionDbUrl: ""
   # LLM
   geminiApiKey: ""
@@ -117,6 +117,6 @@ service:
 ingress:
   enabled: true
   className: "nginx"   # ingress-nginx 컨트롤러 사용 가정(kind 에서도 설치 가능)
-  host: "keenee.local" # /etc/hosts 에 127.0.0.1 keenee.local 추가해 테스트
+  host: "contest-helper.local" # /etc/hosts 에 127.0.0.1 contest-helper.local 추가해 테스트
   # 경로 규칙: /api → api 서비스, / → web 서비스
   annotations: {}

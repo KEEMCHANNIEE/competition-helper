@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from authlib.integrations.httpx_client import OAuth2Client
 
-from keenee_core.config import get_settings
+from contest_helper_core.config import get_settings
 
 GOOGLE_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"

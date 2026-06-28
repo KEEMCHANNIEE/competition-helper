@@ -1,4 +1,4 @@
-# keenee — 프로젝트 개괄 & 작업 구획 (살아있는 지도)
+# contest-helper — 프로젝트 개괄 & 작업 구획 (살아있는 지도)
 
 - 작성일: 2026-06-28
 - 성격: **2~4명 사이드 프로젝트**(회사 업무 아님), 파트타임 ~10h/주, **3주**
@@ -15,7 +15,7 @@
 4개 서비스가 한 레포에 공존. 기존 M1 plan의 루트 `src/app`은 **`services/api/`로 이동**한다.
 
 ```
-keenee/
+contest-helper/
 ├── services/
 │   ├── api/                      # 🔴 FastAPI 모듈러 모놀리식 (현관)
 │   │   ├── src/app/
@@ -47,10 +47,10 @@ keenee/
 │       ├── package.json
 │       └── Dockerfile
 ├── libs/
-│   └── keenee_core/              # 🔴 api·worker 공유(모델/스키마) — 모델 드리프트 방지
+│   └── contest_helper_core/              # 🔴 api·worker 공유(모델/스키마) — 모델 드리프트 방지
 ├── deploy/
 │   ├── docker-compose.yml        # 🔴 로컬: api + worker + redis + pgvector
-│   ├── helm/keenee/              # 🔴 로컬 kind / 🟡 GKE 배포 차트
+│   ├── helm/contest-helper/              # 🔴 로컬 kind / 🟡 GKE 배포 차트
 │   └── terraform/                # 🟡 GKE·Cloud SQL·네트워크·Artifact Registry
 ├── .github/workflows/ci.yml      # 🔴 CI/CD
 ├── docs/
@@ -59,7 +59,7 @@ keenee/
 
 > **분리/통합 메모**
 > - `mcp-server`는 **초기엔 worker 안 in-process**(`worker/src/worker/mcp_tools/`), M3 무렵 별도 `services/mcp/` 컨테이너로 떼어낸다 (학습용 분리).
-> - `libs/keenee_core`는 uv workspace로 api·worker가 공유 (User/recommendation 모델 중복·드리프트 방지). 부담되면 초기엔 api에만 두고 나중에 추출.
+> - `libs/contest_helper_core`는 uv workspace로 api·worker가 공유 (User/recommendation 모델 중복·드리프트 방지). 부담되면 초기엔 api에만 두고 나중에 추출.
 
 ---
 
@@ -87,10 +87,10 @@ keenee/
 
 **DoD:** 구글 로그인 → 내 정보/관심사 저장·조회 가능.
 
-### 구획 C — 데이터 계층 🔴  → `libs/keenee_core/`, `services/api/migrations/`
+### 구획 C — 데이터 계층 🔴  → `libs/contest_helper_core/`, `services/api/migrations/`
 | ID | 과제 | 산출물 | 의존 |
 |----|------|--------|------|
-| C1 | App DB 모델 정의 (`users`) + Alembic 초기화 | `keenee_core/models.py`, `migrations/0001_users` | A2 |
+| C1 | App DB 모델 정의 (`users`) + Alembic 초기화 | `contest_helper_core/models.py`, `migrations/0001_users` | A2 |
 | C2 | 나머지 테이블 (`workspaces`,`workspace_members`,`agent_jobs`,`recommendations`,`embeddings`,`tasks`⚪) | 모델 + 마이그레이션 0002~ | C1 |
 | C3 | 공모전 DB **실제 스키마 파악** → SQL 테이블/컬럼 치환 | `competitions/repository.py` SQL | (접속정보 필요) |
 | C4 | 공모전 텍스트 → 임베딩 적재 잡 (RAG 준비) | `worker/.../embed_job.py`, `embeddings` 테이블 | C2, E2 |
@@ -146,7 +146,7 @@ keenee/
 |----|------|--------|------|
 | H1 | 서비스별 Dockerfile (api/worker/web) | 각 `Dockerfile` | A4 |
 | H2 | docker-compose (api+worker+redis+pgvector) | `deploy/docker-compose.yml` | H1,D2 |
-| H3 | 로컬 kind 클러스터 + Helm 차트(Deployment/Service/Ingress/Config·Secret) | `deploy/helm/keenee/` | H2 |
+| H3 | 로컬 kind 클러스터 + Helm 차트(Deployment/Service/Ingress/Config·Secret) | `deploy/helm/contest-helper/` | H2 |
 
 **DoD:** `docker compose up`으로 전체 기동, kind에 helm install로 배포.
 

@@ -13,19 +13,19 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "keenee.fullname" . }}-worker
+  name: {{ include "contest-helper.fullname" . }}-worker
   labels:
-    {{- include "keenee.labels" . | nindent 4 }}
+    {{- include "contest-helper.labels" . | nindent 4 }}
     app.kubernetes.io/component: worker
 spec:
   replicas: {{ .Values.replicaCount.worker }}
   selector:
     matchLabels:
-      {{- include "keenee.selectorLabels" (dict "ctx" . "component" "worker") | nindent 6 }}
+      {{- include "contest-helper.selectorLabels" (dict "ctx" . "component" "worker") | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "keenee.selectorLabels" (dict "ctx" . "component" "worker") | nindent 8 }}
+        {{- include "contest-helper.selectorLabels" (dict "ctx" . "component" "worker") | nindent 8 }}
     spec:
       containers:
         - name: worker
@@ -33,12 +33,12 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           workingDir: /app/services/worker
           # 큐 소비 루프 기동(포트 없음).
-          command: ["uv", "run", "--no-dev", "--package", "keenee-worker", "python", "-m", "worker.main"]
+          command: ["uv", "run", "--no-dev", "--package", "contest-helper-worker", "python", "-m", "worker.main"]
           envFrom:
             - configMapRef:
-                name: {{ include "keenee.configmapName" . }}
+                name: {{ include "contest-helper.configmapName" . }}
             - secretRef:
-                name: {{ include "keenee.secretName" . }}
+                name: {{ include "contest-helper.secretName" . }}
           # 프로세스 생존 확인용 간단 liveness(파이썬 프로세스가 떠 있나).
           livenessProbe:
             exec:

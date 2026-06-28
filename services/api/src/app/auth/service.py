@@ -9,13 +9,13 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from keenee_core.config import get_settings
-from keenee_core.models import User
+from contest_helper_core.config import get_settings
+from contest_helper_core.models import User
 
 # 세션 쿠키 이름 및 만료(초). deps.get_current_user 와 공유.
-SESSION_COOKIE = "keenee_session"
+SESSION_COOKIE = "contest_helper_session"
 SESSION_MAX_AGE = 60 * 60 * 24 * 14  # 14일
-_SALT = "keenee-session"
+_SALT = "contest-helper-session"
 
 
 def _serializer() -> URLSafeTimedSerializer:
