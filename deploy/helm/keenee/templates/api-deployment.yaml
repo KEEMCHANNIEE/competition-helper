@@ -1,0 +1,64 @@
+# =============================================================================
+# api-deployment.yaml — FastAPI(api) 서버를 굴리는 Deployment
+# =============================================================================
+# Deployment 란? "이 컨테이너를 N개 띄우고, 죽으면 다시 살리고, 업데이트는
+# 무중단으로 굴려라"를 k8s 에게 선언하는 오브젝트다.
+#
+# api 컨테이너는:
+#   - 시작 시 alembic 마이그레이션을 돌린 뒤 uvicorn 기동(command 로 명시)
+#   - ConfigMap(비밀 아님) + Secret(비밀)에서 환경변수를 통째로 주입(envFrom)
+#   - /health 로 liveness/readiness 체크
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "keenee.fullname" . }}-api
+  labels:
+    {{- include "keenee.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ .Values.replicaCount.api }}
+  selector:
+    # 이 Deployment 가 관리할 Pod 를 고르는 라벨(아래 template.labels 와 일치해야 함)
+    matchLabels:
+      {{- include "keenee.selectorLabels" (dict "ctx" . "component" "api") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "keenee.selectorLabels" (dict "ctx" . "component" "api") | nindent 8 }}
+    spec:
+      containers:
+        - name: api
+          image: "{{ .Values.image.api.repository }}:{{ .Values.image.api.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # ★ 기동 명령: 마이그레이션 → uvicorn (docker-compose 와 동일 패턴) ★
+          #   alembic.ini 가 있는 services/api 폴더에서 실행한다.
+          workingDir: /app/services/api
+          command: ["sh", "-c"]
+          args:
+            - "uv run alembic upgrade head && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"
+          ports:
+            - name: http
+              containerPort: 8000
+          # 환경변수를 ConfigMap + Secret 에서 한꺼번에 주입.
+          envFrom:
+            - configMapRef:
+                name: {{ include "keenee.configmapName" . }}
+            - secretRef:
+                name: {{ include "keenee.secretName" . }}
+          # liveness: 죽었으면(응답 없음) 컨테이너 재시작.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30   # 마이그레이션+기동 시간 유예
+            periodSeconds: 15
+          # readiness: 준비 안 됐으면 Service 트래픽에서 제외(롤링 업데이트 안전).
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources.api | nindent 12 }}

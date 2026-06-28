@@ -1,0 +1,96 @@
+# =============================================================================
+# ci.yml — 지속적 통합(CI): 코드가 푸시/PR 될 때마다 자동으로 품질 검사
+# =============================================================================
+# 무엇을 하나:
+#   - 파이썬(api, worker): uv 로 의존성 설치 → ruff 린트 → pytest 테스트
+#   - 노드(web): npm 으로 설치 → 빌드 → vitest 테스트
+# 언제 도나:
+#   - main 으로 push, 또는 PR 이 열릴 때.
+# 목적: 깨진 코드가 main 에 합쳐지지 못하게 막는 "게이트".
+# =============================================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 파이썬 서비스 검사 (api, worker 를 매트릭스로 병렬 실행)
+  # ---------------------------------------------------------------------------
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false # 한 서비스가 실패해도 다른 서비스 검사는 계속
+      matrix:
+        # uv workspace 의 패키지 이름. 둘을 각각 검사한다.
+        service: [keenee-api, keenee-worker]
+    steps:
+      - uses: actions/checkout@v4
+
+      # uv 설치(공식 액션). 캐시도 자동으로 다뤄준다.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      # 개발 의존성 포함 설치(테스트/린트 도구 필요).
+      # 워크스페이스 루트에서 한 번에 동기화하면 keenee-core 도 함께 풀린다.
+      - name: Sync dependencies
+        run: uv sync --dev
+
+      # ruff 린트 — 레포 전체 검사(루트 pyproject 의 ruff 설정 사용).
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      # 해당 서비스의 테스트만 실행.
+      - name: Test (pytest)
+        run: uv run --package ${{ matrix.service }} pytest
+
+  # ---------------------------------------------------------------------------
+  # 프론트엔드(web) 검사
+  # ---------------------------------------------------------------------------
+  web:
+    runs-on: ubuntu-latest
+    # services/web 이 아직 없으면 이 잡은 스킵된다(파일 존재 가드).
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check web exists
+        id: web_check
+        run: |
+          if [ -f services/web/package.json ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "services/web/package.json 없음 → web 잡 스킵"
+          fi
+
+      - name: Set up Node 20
+        if: steps.web_check.outputs.exists == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: services/web/package-lock.json
+
+      - name: Install deps
+        if: steps.web_check.outputs.exists == 'true'
+        working-directory: services/web
+        run: npm ci
+
+      - name: Build
+        if: steps.web_check.outputs.exists == 'true'
+        working-directory: services/web
+        run: npm run build
+
+      - name: Test (vitest)
+        if: steps.web_check.outputs.exists == 'true'
+        working-directory: services/web
+        # --run: watch 모드 없이 1회 실행. 테스트 스크립트가 없으면 실패하지 않도록 || true 가능하나
+        # 여기선 명시적으로 vitest 실행(스크립트가 없다면 package.json 에 추가할 것).
+        run: npm run test -- --run

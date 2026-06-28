@@ -1,0 +1,153 @@
+# =============================================================================
+# docker-compose.yml — 로컬에서 keenee 전체(api+worker+web+db+redis)를 한 번에 기동
+# =============================================================================
+# 이 파일이 무엇인가:
+#   - 개발자 노트북에서 `docker compose up` 한 번으로 5개 컨테이너를 띄운다.
+#       db    : Postgres + pgvector (App DB. RAG 임베딩 저장용 vector 확장 포함)
+#       redis : 큐(api → worker 작업 전달)
+#       api   : FastAPI 현관. 기동 전 alembic 마이그레이션 자동 적용
+#       worker: 백그라운드 에이전트 루프(큐 소비 → LLM 추천 생성)
+#       web   : React 정적 SPA(nginx)
+#
+# ★ 빌드 컨텍스트 주의 ★
+#   이 파일은 deploy/ 안에 있다. 하지만 파이썬 이미지(api/worker)는 레포 루트를
+#   컨텍스트로 잡아야 libs/keenee_core 를 COPY 할 수 있다.
+#   → 그래서 api/worker 의 build.context 는 ".."(= 레포 루트)로 지정한다.
+#
+# 사용법 (레포 루트의 .env 를 미리 채워둔 뒤, deploy/ 에서):
+#   docker compose --env-file ../.env up --build
+# 또는 레포 루트에서:
+#   docker compose -f deploy/docker-compose.yml --env-file .env up --build
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # db: App DB (Postgres 16 + pgvector 확장)
+  # ---------------------------------------------------------------------------
+  db:
+    # ★ pgvector/pgvector:pg16 이미지를 쓰는 이유 ★
+    #   기본 postgres 이미지에는 'vector' 확장이 없다. RAG 임베딩을 pgvector 컬럼에
+    #   저장하려면 이 이미지가 필요하다. (단, 확장 활성화는 마이그레이션에서
+    #   `CREATE EXTENSION IF NOT EXISTS vector` 로 직접 해줘야 함)
+    image: pgvector/pgvector:pg16
+    environment:
+      # 컨테이너가 처음 뜰 때 이 계정/DB 를 자동 생성한다.
+      POSTGRES_USER: keenee
+      POSTGRES_PASSWORD: keenee
+      POSTGRES_DB: keenee
+    ports:
+      - "5432:5432"  # 호스트에서 DB 툴로 직접 접속하고 싶을 때(선택)
+    volumes:
+      - db_data:/var/lib/postgresql/data  # 데이터 영속화(컨테이너 재생성해도 유지)
+    healthcheck:
+      # pg_isready 로 DB 가 실제 연결 가능한지 확인. api/worker 는 이게 healthy 여야 시작.
+      test: ["CMD-SHELL", "pg_isready -U keenee -d keenee"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # redis: 큐 (api 가 작업을 push, worker 가 pop)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"  # 선택(디버깅용 직접 접속)
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]  # PONG 응답이면 healthy
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # api: FastAPI 현관 (포트 8000)
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: ..                      # ★ 레포 루트(= libs/ 포함)를 컨텍스트로
+      dockerfile: deploy/docker/api.Dockerfile
+    environment:
+      # ★ 컨테이너 네트워크 안에서는 호스트명이 서비스명(db, redis)이다 ★
+      #   (.env 의 localhost 값을 그대로 쓰면 컨테이너 안에서 연결 안 됨 → 여기서 덮어씀)
+      APP_DB_URL: postgresql+psycopg://keenee:keenee@db:5432/keenee
+      REDIS_URL: redis://redis:6379/0
+      # 아래는 .env 에서 주입(없으면 빈 값). 형식: ${VAR}
+      COMPETITION_DB_URL: ${COMPETITION_DB_URL:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-}
+      VERTEX_LOCATION: ${VERTEX_LOCATION:-us-central1}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-http://localhost:8000/auth/google/callback}
+      SESSION_SECRET: ${SESSION_SECRET:-dev-secret-change-me}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-}
+    # ★ 기동 시: 마이그레이션 적용 후 uvicorn (Dockerfile CMD 와 동일하지만 명시) ★
+    command: >
+      sh -c "uv run alembic upgrade head &&
+             uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    working_dir: /app/services/api
+    ports:
+      - "8000:8000"
+    depends_on:
+      # db/redis 가 "healthy" 가 된 뒤에야 api 시작 (마이그레이션 실패 방지)
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # FastAPI /health 엔드포인트로 살아있는지 확인.
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s  # 마이그레이션+기동 시간을 감안한 초기 유예
+
+  # ---------------------------------------------------------------------------
+  # worker: 백그라운드 에이전트 루프 (포트 없음)
+  # ---------------------------------------------------------------------------
+  worker:
+    build:
+      context: ..                      # ★ 레포 루트 컨텍스트(api 와 동일 이유)
+      dockerfile: deploy/docker/worker.Dockerfile
+    environment:
+      APP_DB_URL: postgresql+psycopg://keenee:keenee@db:5432/keenee
+      REDIS_URL: redis://redis:6379/0
+      COMPETITION_DB_URL: ${COMPETITION_DB_URL:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-}
+      VERTEX_LOCATION: ${VERTEX_LOCATION:-us-central1}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-}
+    command: ["uv", "run", "--no-dev", "--package", "keenee-worker", "python", "-m", "worker.main"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      # worker 는 테이블이 이미 존재해야 동작하므로, 마이그레이션을 도는 api 가
+      # 먼저 시작되도록 의존(완벽한 보장은 아니지만 순서 힌트).
+      api:
+        condition: service_started
+
+  # ---------------------------------------------------------------------------
+  # web: React SPA (nginx, 포트 80 → 호스트 5173 으로 매핑)
+  # ---------------------------------------------------------------------------
+  web:
+    build:
+      context: ../services/web         # ★ web 은 파이썬 워크스페이스와 무관 → web 폴더가 컨텍스트
+      dockerfile: ../../deploy/docker/web.Dockerfile
+      # 주의: web.Dockerfile 안에서 deploy/docker/nginx.conf 를 COPY 하므로,
+      #       컨텍스트가 services/web 이면 그 경로가 안 보인다.
+      #       → 실제로는 컨텍스트를 레포 루트(..)로 두고 빌드하는 편이 더 안전하다.
+      #       services/web 이 아직 없다면 이 web 서비스는 주석 처리하고 나중에 활성화할 것.
+    ports:
+      - "5173:80"   # 브라우저에서 http://localhost:5173 으로 접속
+    depends_on:
+      - api
+
+# 명명된 볼륨: DB 데이터를 컨테이너 수명과 분리해 보존.
+volumes:
+  db_data:

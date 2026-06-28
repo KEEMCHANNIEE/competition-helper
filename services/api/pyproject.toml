@@ -1,0 +1,36 @@
+[project]
+name = "keenee-api"
+version = "0.0.0"
+description = "keenee api — FastAPI 모듈러 모놀리식 (인증·탐색·추천 위임·워크스페이스)"
+requires-python = ">=3.12"
+dependencies = [
+    "keenee-core",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "alembic>=1.13",
+    "authlib>=1.3",
+    "itsdangerous>=2.1",
+    "redis>=5.0",
+    "httpx>=0.27",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/app"]
+
+# api 는 워크스페이스의 keenee-core 를 그대로 가져다 쓴다(계약 계층).
+[tool.uv.sources]
+keenee-core = { workspace = true }
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

@@ -1,0 +1,21 @@
+# =============================================================================
+# configmap.yaml — 비밀이 아닌 환경변수 묶음
+# =============================================================================
+# ConfigMap 은 "평문이어도 괜찮은 설정값"을 담는 k8s 오브젝트다.
+# api/worker Pod 가 envFrom 으로 이걸 통째로 환경변수로 읽어들인다.
+# (비밀번호/키 같은 민감값은 여기 말고 Secret 으로!)
+#
+# values.yaml 의 config 값 중 일부(REDIS_URL)는 "{{ .Release.Name }}-redis" 처럼
+# 또 다른 템플릿을 품고 있다. 그래서 tpl 함수로 한 번 더 렌더링한다.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "keenee.configmapName" . }}
+  labels:
+    {{- include "keenee.labels" . | nindent 4 }}
+data:
+  {{- range $key, $val := .Values.config }}
+  # tpl: 값 안의 {{ ... }} 까지 렌더링(예: 릴리스명 기반 redis 호스트)
+  {{ $key }}: {{ tpl (toString $val) $ | quote }}
+  {{- end }}

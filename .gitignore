@@ -1,0 +1,25 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# env / secrets
+.env
+*.local
+
+# node / frontend
+node_modules/
+services/web/dist/
+
+# terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+
+# misc
+.DS_Store

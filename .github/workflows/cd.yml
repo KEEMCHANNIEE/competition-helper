@@ -1,0 +1,109 @@
+# =============================================================================
+# cd.yml — 지속적 배포(CD): main 에 합쳐지면 이미지 빌드 → 푸시 → GKE 배포
+# =============================================================================
+# 흐름:
+#   1. 3개 이미지(api/worker/web)를 빌드 — 빌드 컨텍스트는 레포 루트(.)!
+#   2. Artifact Registry 에 push — 태그 = 커밋 SHA (추적/롤백 쉬움)
+#   3. GKE 에 연결 후 `helm upgrade` 로 새 이미지 태그 배포
+#
+# ★ 시크릿(GCP 자격증명 등)은 GitHub 저장소 Settings > Secrets 에 등록하고
+#   여기서는 ${{ secrets.XXX }} 플레이스홀더로만 참조한다(아래 주석 참고).
+# =============================================================================
+name: CD
+
+on:
+  push:
+    branches: [main] # main 에 합쳐질 때만 배포
+
+# --- 환경값(아래 placeholder 를 실제 값/시크릿으로 교체) ---
+env:
+  # GCP 프로젝트/리전/레지스트리 (시크릿 또는 변수로 관리 권장)
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}        # 예: my-keenee-123456
+  GCP_REGION: ${{ secrets.GCP_REGION }}                # 예: asia-northeast3
+  ARTIFACT_REPO: ${{ secrets.GCP_ARTIFACT_REPO }}      # 예: keenee
+  GKE_CLUSTER: ${{ secrets.GKE_CLUSTER }}              # 예: keenee-gke
+  GKE_ZONE: ${{ secrets.GKE_ZONE }}                    # 예: asia-northeast3-a
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    # 워크로드 아이덴티티(OIDC)로 GCP 인증하려면 id-token 권한이 필요.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # 이미지 태그로 쓸 짧은 git SHA 계산.
+      - name: Compute image tag
+        id: vars
+        run: echo "sha=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      # --- GCP 인증 ---
+      # 방법 A(권장): Workload Identity Federation (키 없이 OIDC).
+      #   secrets.GCP_WIF_PROVIDER, secrets.GCP_SA_EMAIL 을 등록해 사용.
+      # 방법 B(간단): 서비스계정 JSON 키를 secrets.GCP_SA_KEY 로 등록.
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          # ↓ 둘 중 사용하는 방법의 줄만 남기고 나머지는 지운다.
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }} # 방법 A
+          service_account: ${{ secrets.GCP_SA_EMAIL }}                # 방법 A
+          # credentials_json: ${{ secrets.GCP_SA_KEY }}               # 방법 B
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      # 도커가 Artifact Registry 로 push 할 수 있게 인증 설정.
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      # --- 이미지 3개 빌드 & 푸시 (컨텍스트=레포 루트 ".") ---
+      - name: Build & push images
+        run: |
+          REG="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}"
+          TAG="${{ steps.vars.outputs.sha }}"
+
+          # api
+          docker build -f deploy/docker/api.Dockerfile -t "$REG/api:$TAG" .
+          docker push "$REG/api:$TAG"
+
+          # worker
+          docker build -f deploy/docker/worker.Dockerfile -t "$REG/worker:$TAG" .
+          docker push "$REG/worker:$TAG"
+
+          # web (services/web 이 있을 때만)
+          if [ -f services/web/package.json ]; then
+            docker build -f deploy/docker/web.Dockerfile -t "$REG/web:$TAG" .
+            docker push "$REG/web:$TAG"
+          fi
+
+      # --- GKE 연결 ---
+      - name: Get GKE credentials
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ env.GKE_CLUSTER }}
+          location: ${{ env.GKE_ZONE }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      # --- Helm 으로 새 이미지 태그 배포(무중단 롤링 업그레이드) ---
+      # 비밀값(DB URL, API 키 등)은 GitHub Secrets 에서 --set 으로 주입.
+      # 이미 설치돼 있으면 upgrade, 없으면 install (--install 플래그).
+      - name: Helm upgrade
+        run: |
+          REG="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPO}"
+          TAG="${{ steps.vars.outputs.sha }}"
+
+          helm upgrade --install keenee deploy/helm/keenee \
+            --set image.api.repository="$REG/api"       --set image.api.tag="$TAG" \
+            --set image.worker.repository="$REG/worker" --set image.worker.tag="$TAG" \
+            --set image.web.repository="$REG/web"       --set image.web.tag="$TAG" \
+            --set secret.appDbUrl="${{ secrets.APP_DB_URL }}" \
+            --set secret.competitionDbUrl="${{ secrets.COMPETITION_DB_URL }}" \
+            --set secret.geminiApiKey="${{ secrets.GEMINI_API_KEY }}" \
+            --set secret.googleOauthClientId="${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}" \
+            --set secret.googleOauthClientSecret="${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}" \
+            --set secret.sessionSecret="${{ secrets.SESSION_SECRET }}" \
+            --wait --timeout 5m

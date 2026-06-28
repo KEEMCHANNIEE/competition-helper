@@ -1,0 +1,31 @@
+"""agent.run 과제 계약 테스트 — 현재는 NotImplementedError 로 FAIL.
+
+TODO(AI 담당): worker/agent.py 를 구현해 이 테스트를 통과시킬 것.
+이 테스트는 기대 동작(계약)을 문서화한다.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from keenee_core.schemas import RecommendationOut, RecommendJobPayload
+from worker import agent
+
+
+def test_run_returns_list_of_recommendation_out():
+    payload = RecommendJobPayload(job_id="a-1", user_id=1, limit=3)
+    result = agent.run(payload)
+    assert isinstance(result, list)
+    assert all(isinstance(r, RecommendationOut) for r in result)
+
+
+def test_run_respects_limit():
+    payload = RecommendJobPayload(job_id="a-2", user_id=1, limit=2)
+    result = agent.run(payload)
+    assert len(result) <= payload.limit
+
+
+def test_run_currently_not_implemented():
+    # 구현 완료 후 이 테스트는 삭제/교체한다(미구현 상태 가드).
+    with pytest.raises(NotImplementedError):
+        agent.run(RecommendJobPayload(job_id="a-3", user_id=1, limit=1))

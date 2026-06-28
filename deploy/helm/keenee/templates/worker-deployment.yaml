@@ -1,0 +1,49 @@
+# =============================================================================
+# worker-deployment.yaml — 백그라운드 에이전트(worker) Deployment
+# =============================================================================
+# worker 는 웹 요청을 받지 않는다(= Service 없음, 포트 없음).
+# Redis 큐를 무한히 꺼내(BRPOP) LLM 추천을 생성하는 루프를 돈다.
+# stateless 이므로 replicas 를 늘리면 여러 Pod 가 큐를 나눠 처리한다.
+#
+# probe 주의: HTTP 포트가 없으므로 httpGet liveness 를 쓸 수 없다.
+#   → 프로세스가 살아있는지 정도만 exec 로 확인(파이썬 프로세스 존재 체크).
+#   더 정교하게 하려면 worker 가 주기적으로 갱신하는 "heartbeat 파일"을 두고
+#   그 파일의 갱신 시각을 검사하는 방식으로 발전시킬 수 있다.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "keenee.fullname" . }}-worker
+  labels:
+    {{- include "keenee.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.replicaCount.worker }}
+  selector:
+    matchLabels:
+      {{- include "keenee.selectorLabels" (dict "ctx" . "component" "worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "keenee.selectorLabels" (dict "ctx" . "component" "worker") | nindent 8 }}
+    spec:
+      containers:
+        - name: worker
+          image: "{{ .Values.image.worker.repository }}:{{ .Values.image.worker.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          workingDir: /app/services/worker
+          # 큐 소비 루프 기동(포트 없음).
+          command: ["uv", "run", "--no-dev", "--package", "keenee-worker", "python", "-m", "worker.main"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "keenee.configmapName" . }}
+            - secretRef:
+                name: {{ include "keenee.secretName" . }}
+          # 프로세스 생존 확인용 간단 liveness(파이썬 프로세스가 떠 있나).
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pgrep -f 'worker.main' > /dev/null"]
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.resources.worker | nindent 12 }}

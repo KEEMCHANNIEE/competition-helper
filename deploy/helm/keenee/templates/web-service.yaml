@@ -1,0 +1,21 @@
+# =============================================================================
+# web-service.yaml — web Pod 앞의 고정 진입점(Service)
+# =============================================================================
+# api-service 와 동일 개념. web Pod(nginx, 80)들에게 트래픽을 분배한다.
+# 외부 노출은 Ingress 가 / 경로를 이 서비스로 보내 처리한다.
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "keenee.fullname" . }}-web
+  labels:
+    {{- include "keenee.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  type: {{ .Values.service.web.type }}
+  selector:
+    {{- include "keenee.selectorLabels" (dict "ctx" . "component" "web") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.web.port }}
+      targetPort: http

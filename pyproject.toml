@@ -1,0 +1,19 @@
+[project]
+name = "keenee"
+version = "0.0.0"
+description = "공모전 추천 에이전트 (MLOps 학습 프로젝트) — 모노레포 루트"
+requires-python = ">=3.12"
+
+# uv workspace: libs/keenee_core 를 api·worker 가 공유한다.
+[tool.uv.workspace]
+members = ["libs/*", "services/api", "services/worker"]
+
+[tool.uv.sources]
+keenee-core = { workspace = true }
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

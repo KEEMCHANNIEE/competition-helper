@@ -1,0 +1,47 @@
+# =============================================================================
+# web-deployment.yaml — React SPA(nginx) Deployment
+# =============================================================================
+# web 은 빌드된 정적 파일을 nginx 가 80 포트로 서빙한다.
+# 환경변수가 필요 없는 순수 정적 서버라 envFrom 을 붙이지 않는다.
+# (백엔드 주소가 필요하면 빌드 시점에 Vite 의 VITE_* 변수로 굽거나,
+#  Ingress 에서 /api 를 api 서비스로 라우팅한다.)
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "keenee.fullname" . }}-web
+  labels:
+    {{- include "keenee.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  replicas: {{ .Values.replicaCount.web }}
+  selector:
+    matchLabels:
+      {{- include "keenee.selectorLabels" (dict "ctx" . "component" "web") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "keenee.selectorLabels" (dict "ctx" . "component" "web") | nindent 8 }}
+    spec:
+      containers:
+        - name: web
+          image: "{{ .Values.image.web.repository }}:{{ .Values.image.web.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+          # nginx 가 정적 파일을 서빙하는지 루트(/)로 확인.
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources.web | nindent 12 }}

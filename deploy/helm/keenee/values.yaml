@@ -1,0 +1,122 @@
+# =============================================================================
+# values.yaml — 차트의 "설정 다이얼"(환경별로 바꾸는 값들)
+# =============================================================================
+# 템플릿(templates/*.yaml)은 고정된 뼈대이고, 바뀌는 값(이미지 태그, 복제 수,
+# 도메인, 리소스 등)은 전부 여기 모은다. 환경마다 다른 값은
+#   helm install ... -f values-prod.yaml   또는   --set image.api.tag=abc123
+# 으로 덮어쓴다.
+#
+# ★ 비밀(secret)은 절대 이 파일에 평문으로 적지 말 것! ★
+#   GEMINI_API_KEY, OAuth 시크릿, DB 비밀번호 같은 건 git 에 올라가면 사고다.
+#   → 아래 secret 블록은 "비워 두고", 설치 시 --set secret.geminiApiKey=... 로
+#     주입하거나, 외부 시크릿(Sealed Secrets / External Secrets)을 쓴다.
+# =============================================================================
+
+# 모든 리소스 이름 앞에 붙는 접두어(여러 환경을 한 클러스터에 둘 때 충돌 방지).
+nameOverride: ""
+fullnameOverride: ""
+
+# -----------------------------------------------------------------------------
+# 이미지 설정: 서비스별 레지스트리/태그
+# -----------------------------------------------------------------------------
+# repository = 이미지 주소. 로컬(kind)에서는 keenee-api 처럼 짧게,
+#              GKE 에서는 Artifact Registry 전체 경로로 바꾼다(예:
+#              asia-northeast3-docker.pkg.dev/PROJECT/keenee/api).
+# tag = 보통 git 커밋 SHA (CD 가 --set 으로 주입).
+image:
+  pullPolicy: IfNotPresent   # 같은 태그면 다시 안 받음. dev 에서 latest 쓰면 Always 권장.
+  api:
+    repository: keenee-api
+    tag: "latest"
+  worker:
+    repository: keenee-worker
+    tag: "latest"
+  web:
+    repository: keenee-web
+    tag: "latest"
+
+# -----------------------------------------------------------------------------
+# 복제 수(Pod 개수): 트래픽/안정성에 따라 조정
+# -----------------------------------------------------------------------------
+replicaCount:
+  api: 1
+  worker: 1   # worker 는 stateless 라 늘려도 됨(큐를 나눠 처리). 학습용은 1.
+  web: 1
+
+# -----------------------------------------------------------------------------
+# 리소스 요청/제한 (작은 학습 클러스터 기준으로 보수적으로)
+# requests = 스케줄링에 보장되는 최소량, limits = 초과 금지 상한.
+# -----------------------------------------------------------------------------
+resources:
+  api:
+    requests: { cpu: "100m", memory: "256Mi" }
+    limits:   { cpu: "500m", memory: "512Mi" }
+  worker:
+    requests: { cpu: "100m", memory: "256Mi" }
+    limits:   { cpu: "500m", memory: "512Mi" }
+  web:
+    requests: { cpu: "50m", memory: "64Mi" }
+    limits:   { cpu: "200m", memory: "128Mi" }
+  redis:
+    requests: { cpu: "50m", memory: "64Mi" }
+    limits:   { cpu: "200m", memory: "256Mi" }
+
+# -----------------------------------------------------------------------------
+# 비밀이 아닌 환경변수 (ConfigMap 으로 주입) — git 에 올라가도 안전한 값만!
+# -----------------------------------------------------------------------------
+# 클러스터 내부 통신은 서비스 이름(redis, db)을 호스트로 쓴다.
+config:
+  REDIS_URL: "redis://{{ .Release.Name }}-redis:6379/0"
+  VERTEX_LOCATION: "us-central1"
+  GOOGLE_CLOUD_PROJECT: ""            # Vertex 경로 쓸 때 채움(프로젝트 ID 는 비밀 아님)
+  GOOGLE_OAUTH_REDIRECT_URI: "http://localhost/auth/google/callback"
+  LANGFUSE_HOST: ""
+
+# -----------------------------------------------------------------------------
+# 비밀 환경변수 (Secret 으로 주입) — ★ 여기에 실제 값 쓰지 말 것 ★
+# -----------------------------------------------------------------------------
+# 기본은 전부 빈 문자열. 설치 시 --set secret.geminiApiKey=... 또는
+# 외부 시크릿 매니저로 채운다. (templates/secret.yaml 이 base64 인코딩 처리)
+#
+# create=false 로 두면 차트가 Secret 을 만들지 않고, 같은 이름의 기존 Secret
+# (예: External Secrets 가 만든 것)을 그대로 참조한다.
+secret:
+  create: true
+  # DB 접속 URL 들(비밀번호 포함 → 비밀로 취급)
+  appDbUrl: "postgresql+psycopg://keenee:keenee@HOST:5432/keenee"
+  competitionDbUrl: ""
+  # LLM
+  geminiApiKey: ""
+  # OAuth
+  googleOauthClientId: ""
+  googleOauthClientSecret: ""
+  # 세션 서명 키
+  sessionSecret: "dev-secret-change-me"
+  # 관측(보너스)
+  langfusePublicKey: ""
+  langfuseSecretKey: ""
+
+# -----------------------------------------------------------------------------
+# 내장 Redis (kind/dev 용 단일 인스턴스). 운영에서는 관리형 Redis 권장.
+# -----------------------------------------------------------------------------
+redis:
+  enabled: true
+  image: "redis:7"
+
+# -----------------------------------------------------------------------------
+# 서비스/인그레스 (외부 노출 방법)
+# -----------------------------------------------------------------------------
+service:
+  api:
+    type: ClusterIP   # 클러스터 내부 전용(Ingress 가 외부 노출 담당)
+    port: 8000
+  web:
+    type: ClusterIP
+    port: 80
+
+ingress:
+  enabled: true
+  className: "nginx"   # ingress-nginx 컨트롤러 사용 가정(kind 에서도 설치 가능)
+  host: "keenee.local" # /etc/hosts 에 127.0.0.1 keenee.local 추가해 테스트
+  # 경로 규칙: /api → api 서비스, / → web 서비스
+  annotations: {}
