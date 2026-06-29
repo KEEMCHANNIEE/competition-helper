@@ -24,13 +24,26 @@ class RecommendJobPayload(BaseModel):
 
 
 class CompetitionOut(BaseModel):
-    """공모전 DB 읽기 결과 1건."""
+    """공모전 DB(contests 테이블) 읽기 결과 1건.
+
+    deadline = contests.end_date, url = contests.homepage 로 매핑한다.
+    (호환 위해 deadline/organizer/url 필드명 유지)
+    """
 
     id: int
     title: str
-    deadline: date | None = None
     organizer: str | None = None
-    url: str | None = None
+    host: str | None = None
+    category: list[str] = []
+    target: list[str] = []
+    keywords: list[str] = []
+    start_date: date | None = None
+    deadline: date | None = None  # = contests.end_date
+    url: str | None = None  # = contests.homepage
+    poster_url: str | None = None
+    total_prize_amount: int | None = None
+    participation_type: str | None = None
+    status: str | None = None  # 진행중 / 마감
 
 
 class RecommendationOut(BaseModel):

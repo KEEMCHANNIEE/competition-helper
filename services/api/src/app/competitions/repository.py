@@ -6,7 +6,6 @@ SQL 은 항상 파라미터 바인딩한다.
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Protocol
 
 from sqlalchemy import text
@@ -25,23 +24,26 @@ class SqlCompetitionRepository:
     """실제 공모전 DB 를 읽는 구현."""
 
     def list_open(self, limit: int = 20) -> list[CompetitionOut]:
-        """마감(deadline)이 지나지 않은 공모전을 마감 임박순으로 반환.
+        """진행중인 공모전을 마감 임박순으로 반환.
 
-        # TODO: 실제 공모전 DB 스키마에 맞게 치환.
-        # 아래는 competitions(id, title, deadline, organizer, url) 가정.
-        # 실제 테이블/컬럼명이 확정되면 SQL 의 테이블명·컬럼명만 바꾸면 된다.
+        실제 소스 스키마: contests(end_date=마감일, homepage=외부링크, status=진행중/마감).
+        end_date/homepage 를 deadline/url 로 alias 해 CompetitionOut 에 매핑한다.
         """
         sql = text(
             """
-            SELECT id, title, deadline, organizer, url
-            FROM competitions
-            WHERE deadline IS NULL OR deadline >= :today
-            ORDER BY deadline ASC NULLS LAST
+            SELECT id, title, organizer, host,
+                   category, target, keywords,
+                   start_date,
+                   end_date AS deadline,
+                   homepage AS url,
+                   poster_url, total_prize_amount,
+                   participation_type, status
+            FROM contests
+            WHERE status = '진행중'
+            ORDER BY end_date ASC NULLS LAST
             LIMIT :limit
             """
         )
         with competition_session_factory()() as session:
-            rows = session.execute(
-                sql, {"today": date.today(), "limit": limit}
-            ).mappings()
+            rows = session.execute(sql, {"limit": limit}).mappings()
             return [CompetitionOut.model_validate(dict(row)) for row in rows]

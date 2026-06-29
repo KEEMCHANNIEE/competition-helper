@@ -4,7 +4,18 @@ TODO(AI 담당): 이 모듈을 구현해 아래 테스트를 통과시킬 것.
 
 공모전 DB 는 읽기 전용. ``contest_helper_core.competition_db.competition_session_factory`` 로
 세션을 얻고, SQL 은 항상 파라미터 바인딩한다(인젝션 금지).
-실제 테이블/컬럼명은 소스 DB 에 맞춰 치환 필요(C3).
+
+실제 소스 테이블 = ``contests`` (Supabase Postgres). 주요 컬럼:
+  id, title, organizer, host, host_type,
+  category TEXT[], target TEXT[], keywords TEXT[],
+  start_date DATE, end_date DATE(=마감),
+  homepage(=외부링크), poster_url,
+  total_prize_amount, first_prize_amount,
+  participation_type, team_config, is_career_benefit,
+  requirements TEXT[], evaluation_criteria TEXT[],
+  description JSONB, status VARCHAR(진행중/마감), created_at, updated_at
+부가 출처 테이블 = ``contests_sources`` (source_site, source_url, views, scrap_count ...).
+CompetitionOut 매핑: deadline=end_date, url=homepage.
 """
 
 from __future__ import annotations

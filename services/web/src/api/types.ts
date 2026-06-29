@@ -4,13 +4,22 @@
 /** 추천 작업 상태. JobStatus(str, Enum) 과 동일. */
 export type JobStatus = "queued" | "running" | "done" | "failed";
 
-/** 공모전 1건 — CompetitionOut. */
+/** 공모전 1건 — CompetitionOut. (deadline=end_date, url=homepage) */
 export interface Competition {
   id: number;
   title: string;
-  deadline: string | null; // date (ISO yyyy-mm-dd) | null
   organizer: string | null;
-  url: string | null;
+  host: string | null;
+  category: string[];
+  target: string[];
+  keywords: string[];
+  start_date: string | null;
+  deadline: string | null; // = end_date (ISO yyyy-mm-dd) | null
+  url: string | null; // = homepage
+  poster_url: string | null;
+  total_prize_amount: number | null;
+  participation_type: string | null;
+  status: string | null; // 진행중 / 마감
 }
 
 /** 추천 결과 1건 — RecommendationOut. */
