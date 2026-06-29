@@ -10,6 +10,10 @@ TODO(AI 담당): 이 모듈을 구현해 아래 테스트를 통과시킬 것.
     reg["search_competitions"]   # competitions.search_competitions
     reg["get_competition_detail"]
     reg["semantic_search"]       # semantic.semantic_search
+    reg["create_tasks"]          # tasks.create_tasks (계획 → 워크스페이스 저장)
+
+구현 가이드: 아래 TOOLS 목록의 (이름 → 함수)를 그대로 dict 로 만들면 된다.
+새 도구(예: web_search)는 TOOLS 에 한 줄 추가만 하면 자동 노출된다.
 """
 
 from __future__ import annotations
@@ -17,12 +21,23 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from worker.mcp_tools import competitions, semantic, tasks
+
+# 에이전트가 쓸 in-process 도구 목록. build_registry 가 이걸 dict 로 노출한다.
+# (build_registry 자체는 과제 stub 이지만, 등록 대상은 여기 한 곳에 모아 둔다.)
+TOOLS: dict[str, Callable[..., Any]] = {
+    "search_competitions": competitions.search_competitions,
+    "get_competition_detail": competitions.get_competition_detail,
+    "semantic_search": semantic.semantic_search,
+    "create_tasks": tasks.create_tasks,
+}
+
 
 def build_registry() -> dict[str, Callable[..., Any]]:
     """도구 이름 → 호출 가능 객체 매핑을 만든다.
 
     Returns:
         최소 ``search_competitions``, ``get_competition_detail``,
-        ``semantic_search`` 키를 갖는 도구 레지스트리.
+        ``semantic_search``, ``create_tasks`` 키를 갖는 도구 레지스트리.
     """
     raise NotImplementedError("TODO(AI 담당): build_registry 를 구현하세요.")

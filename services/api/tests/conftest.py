@@ -21,7 +21,10 @@ from sqlalchemy.pool import StaticPool
 from contest_helper_core.models import (
     AgentJob,
     Base,
+    Conversation,
+    Message,
     Recommendation,
+    Task,
     User,
     Workspace,
     WorkspaceMember,
@@ -36,13 +39,16 @@ from app.deps import (
 )
 from app.main import app as fastapi_app
 
-# SQLite 가 만들 수 있는 테이블만(embeddings/tasks 제외).
+# SQLite 가 만들 수 있는 테이블만(pgvector Vector 쓰는 embeddings 만 제외).
 TEST_TABLES = [
     User.__table__,
     Workspace.__table__,
     WorkspaceMember.__table__,
     AgentJob.__table__,
     Recommendation.__table__,
+    Task.__table__,
+    Conversation.__table__,
+    Message.__table__,
 ]
 
 

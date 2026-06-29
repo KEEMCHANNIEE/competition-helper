@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from contest_helper_core.models import User
+from contest_helper_core.schemas import TaskIn, TaskOut
 
 from app.deps import get_current_user, get_db
 from app.workspaces import service
@@ -18,6 +19,7 @@ router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
 class WorkspaceCreate(BaseModel):
     name: str
+    contest_id: int | None = None
 
 
 class MemberCreate(BaseModel):
@@ -35,6 +37,7 @@ class WorkspaceOut(BaseModel):
     id: int
     name: str
     owner_id: int
+    contest_id: int | None = None
     created_at: datetime | None = None
 
 
@@ -67,7 +70,9 @@ def create_workspace(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> WorkspaceOut:
-    ws = service.create_workspace(db, name=payload.name, owner=current_user)
+    ws = service.create_workspace(
+        db, name=payload.name, owner=current_user, contest_id=payload.contest_id
+    )
     return WorkspaceOut.model_validate(ws)
 
 
@@ -119,6 +124,37 @@ def get_workspace(
         id=ws.id,
         name=ws.name,
         owner_id=ws.owner_id,
+        contest_id=ws.contest_id,
         created_at=ws.created_at,
         recommendations=[RecommendationItem.model_validate(r) for r in recos],
     )
+
+
+@router.get("/{workspace_id}/tasks", response_model=list[TaskOut])
+def list_tasks(
+    workspace_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[TaskOut]:
+    """워크스페이스 할 일 목록(멤버만). week_no, id 순."""
+    service.get_workspace_or_404(db, workspace_id)
+    service.require_member(db, workspace_id, current_user.id)
+    tasks = service.list_tasks(db, workspace_id)
+    return [TaskOut.model_validate(t, from_attributes=True) for t in tasks]
+
+
+@router.post(
+    "/{workspace_id}/tasks",
+    response_model=TaskOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_task(
+    workspace_id: int,
+    payload: TaskIn,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TaskOut:
+    """할 일 1건 수동 추가(멤버만)."""
+    ws = service.get_workspace_or_404(db, workspace_id)
+    task = service.add_task(db, ws=ws, actor=current_user, payload=payload)
+    return TaskOut.model_validate(task, from_attributes=True)

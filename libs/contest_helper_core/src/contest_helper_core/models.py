@@ -35,6 +35,8 @@ class Workspace(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(200))
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    # 이 워크스페이스가 준비하는 공모전(contests.id). 없을 수도 있음.
+    contest_id: Mapped[int | None] = mapped_column(Integer, default=None, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -96,11 +98,50 @@ class Embedding(Base):
 
 
 class Task(Base):
-    """백로그용. 스키마만 미리 준비, 기능은 후순위."""
+    """워크스페이스의 할 일. 계획 에이전트가 create_tasks 로 채운다."""
 
     __tablename__ = "tasks"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
     title: Mapped[str] = mapped_column(String(500))
+    description: Mapped[str | None] = mapped_column(Text, default=None)
     status: Mapped[str] = mapped_column(String(20), default="todo")
+    assignee_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), default=None, index=True
+    )
+    week_no: Mapped[int | None] = mapped_column(Integer, default=None)  # 몇 주차 할 일
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class Conversation(Base):
+    """에이전트와의 대화 세션. (워크스페이스에 연결될 수 있음)"""
+
+    __tablename__ = "conversations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    workspace_id: Mapped[int | None] = mapped_column(
+        ForeignKey("workspaces.id"), default=None, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class Message(Base):
+    """대화 속 한 줄. role = user / assistant."""
+
+    __tablename__ = "messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("conversations.id"), index=True
+    )
+    role: Mapped[str] = mapped_column(String(20))  # user / assistant
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

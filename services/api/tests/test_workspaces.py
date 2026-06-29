@@ -71,3 +71,51 @@ def test_add_member_unknown_email_404(client):
         f"/workspaces/{ws_id}/members", json={"email": "ghost@contest-helper.dev"}
     )
     assert resp.status_code == 404
+
+
+def test_create_workspace_with_contest_id(client):
+    resp = client.post("/workspaces", json={"name": "팀B", "contest_id": 42})
+    assert resp.status_code == 201
+    assert resp.json()["contest_id"] == 42
+
+
+def test_add_and_list_tasks(client):
+    ws_id = client.post("/workspaces", json={"name": "팀A"}).json()["id"]
+
+    # 멤버(owner)가 할 일 추가.
+    t1 = client.post(
+        f"/workspaces/{ws_id}/tasks",
+        json={"title": "기획서 작성", "week_no": 2},
+    )
+    assert t1.status_code == 201
+    assert t1.json()["title"] == "기획서 작성"
+
+    client.post(
+        f"/workspaces/{ws_id}/tasks",
+        json={"title": "아이디어 회의", "week_no": 1},
+    )
+
+    # week_no 순으로 정렬되어 나온다.
+    tasks = client.get(f"/workspaces/{ws_id}/tasks").json()
+    assert [t["week_no"] for t in tasks] == [1, 2]
+    assert tasks[0]["title"] == "아이디어 회의"
+
+
+def test_list_tasks_requires_membership(client, db_session, test_user):
+    from contest_helper_core.models import User, Workspace, WorkspaceMember
+
+    # 남의 워크스페이스(현재 유저는 멤버 아님).
+    other = User(
+        email="boss@contest-helper.dev", name="사장", interests=[], skills=[]
+    )
+    db_session.add(other)
+    db_session.commit()
+    ws = Workspace(name="외부팀", owner_id=other.id)
+    db_session.add(ws)
+    db_session.commit()
+    db_session.add(
+        WorkspaceMember(workspace_id=ws.id, user_id=other.id, role="owner")
+    )
+    db_session.commit()
+
+    assert client.get(f"/workspaces/{ws.id}/tasks").status_code == 403

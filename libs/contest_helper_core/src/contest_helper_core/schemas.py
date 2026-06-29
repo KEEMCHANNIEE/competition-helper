@@ -62,3 +62,51 @@ class JobResultOut(BaseModel):
     status: JobStatus
     results: list[RecommendationOut] = []
     error: str | None = None
+
+
+# ---- 대화(채팅) ----
+
+class ChatJobPayload(BaseModel):
+    """api → 큐 → worker 로 전달되는 채팅 작업 입력."""
+
+    job_id: str
+    user_id: int
+    conversation_id: int
+
+
+class MessageOut(BaseModel):
+    """대화 속 한 줄."""
+
+    role: str  # user / assistant
+    content: str
+
+
+class ChatStateOut(BaseModel):
+    """api → web 채팅 폴링 응답. pending=True 면 에이전트가 아직 답하는 중."""
+
+    conversation_id: int
+    pending: bool
+    messages: list[MessageOut] = []
+    error: str | None = None
+
+
+# ---- 계획(할 일) ----
+
+class TaskOut(BaseModel):
+    """워크스페이스 할 일 1건."""
+
+    id: int
+    title: str
+    description: str | None = None
+    status: str = "todo"
+    assignee_id: int | None = None
+    week_no: int | None = None
+
+
+class TaskIn(BaseModel):
+    """create_tasks 도구가 받는 할 일 입력(저장 전)."""
+
+    title: str
+    description: str | None = None
+    assignee_id: int | None = None
+    week_no: int | None = None

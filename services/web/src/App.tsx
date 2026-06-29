@@ -7,6 +7,8 @@ import { Login } from "./pages/Login";
 import { Interests } from "./pages/Interests";
 import { Recommend } from "./pages/Recommend";
 import { Workspace } from "./pages/Workspace";
+import { Chat } from "./pages/Chat";
+import { Plan } from "./pages/Plan";
 
 export default function App() {
   const { user, status } = useAuth();
@@ -38,7 +40,9 @@ export default function App() {
           <Route path="/login" element={<Navigate to="/recommend" replace />} />
           <Route path="/interests" element={<Interests />} />
           <Route path="/recommend" element={<Recommend />} />
+          <Route path="/chat" element={<Chat />} />
           <Route path="/workspace" element={<Workspace />} />
+          <Route path="/workspace/:id/plan" element={<Plan />} />
           <Route path="*" element={<Navigate to="/recommend" replace />} />
         </Routes>
       </main>

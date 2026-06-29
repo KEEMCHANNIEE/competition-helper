@@ -13,6 +13,7 @@ export function NavBar({ user }: NavBarProps) {
         contest-helper
       </NavLink>
       <div className="navbar__links">
+        <NavLink to="/chat">대화</NavLink>
         <NavLink to="/recommend">추천</NavLink>
         <NavLink to="/interests">관심사</NavLink>
         <NavLink to="/workspace">워크스페이스</NavLink>

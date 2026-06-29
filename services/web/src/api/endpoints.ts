@@ -1,11 +1,14 @@
 // 엔드포인트별 타입드 함수. 페이지/훅은 여기만 호출한다.
 import { apiClient } from "./client";
 import type {
+  ChatAccepted,
+  ChatState,
   Competition,
   JobResult,
   MeUpdate,
   Recommendation,
   RecommendAccepted,
+  Task,
   User,
   Workspace,
   WorkspaceDetail,
@@ -81,6 +84,32 @@ export function attachRecommendations(
 
 export function getWorkspace(workspaceId: number): Promise<WorkspaceDetail> {
   return apiClient.get<WorkspaceDetail>(`/workspaces/${workspaceId}`);
+}
+
+/** 워크스페이스 할 일 목록(주차별 계획). */
+export function getWorkspaceTasks(workspaceId: number): Promise<Task[]> {
+  return apiClient.get<Task[]>(`/workspaces/${workspaceId}/tasks`);
+}
+
+// --- 대화(채팅) ---
+
+export interface SendChatBody {
+  conversation_id: number | null;
+  message: string;
+  workspace_id: number | null;
+}
+
+/** 메시지 전송 → {conversation_id, job_id}. 무거운 처리는 큐로. */
+export function sendChat(body: SendChatBody): Promise<ChatAccepted> {
+  return apiClient.post<ChatAccepted>("/chat", body);
+}
+
+/** 대화·답변 폴링. pending=true 면 아직 처리 중. */
+export function getChat(
+  conversationId: number,
+  signal?: AbortSignal,
+): Promise<ChatState> {
+  return apiClient.get<ChatState>(`/chat/${conversationId}`, signal);
 }
 
 // 재노출(편의용)

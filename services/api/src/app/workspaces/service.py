@@ -11,10 +11,12 @@ from sqlalchemy.orm import Session
 
 from contest_helper_core.models import (
     Recommendation,
+    Task,
     User,
     Workspace,
     WorkspaceMember,
 )
+from contest_helper_core.schemas import TaskIn
 
 
 def get_workspace_or_404(db: Session, workspace_id: int) -> Workspace:
@@ -53,9 +55,11 @@ def require_owner(db: Session, ws: Workspace, user_id: int) -> None:
         )
 
 
-def create_workspace(db: Session, *, name: str, owner: User) -> Workspace:
+def create_workspace(
+    db: Session, *, name: str, owner: User, contest_id: int | None = None
+) -> Workspace:
     """팀 생성. 생성자를 owner 로 두고 멤버로도 등록한다."""
-    ws = Workspace(name=name, owner_id=owner.id)
+    ws = Workspace(name=name, owner_id=owner.id, contest_id=contest_id)
     db.add(ws)
     db.flush()  # ws.id 확보
 
@@ -123,3 +127,33 @@ def list_recommendations(db: Session, workspace_id: int) -> list[Recommendation]
             .order_by(Recommendation.id.asc())
         ).all()
     )
+
+
+def list_tasks(db: Session, workspace_id: int) -> list[Task]:
+    """워크스페이스 할 일 목록. week_no, id 순으로 정렬한다."""
+    return list(
+        db.scalars(
+            select(Task)
+            .where(Task.workspace_id == workspace_id)
+            .order_by(Task.week_no.asc(), Task.id.asc())
+        ).all()
+    )
+
+
+def add_task(
+    db: Session, *, ws: Workspace, actor: User, payload: TaskIn
+) -> Task:
+    """할 일 1건 추가(멤버만)."""
+    require_member(db, ws.id, actor.id)
+
+    task = Task(
+        workspace_id=ws.id,
+        title=payload.title,
+        description=payload.description,
+        assignee_id=payload.assignee_id,
+        week_no=payload.week_no,
+    )
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+    return task

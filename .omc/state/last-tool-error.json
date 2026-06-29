@@ -1,7 +1,7 @@
 {
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"python3 -c \\\"\\nimport yaml, sys\\nfor f in ['deploy/docker-compose.yml', '.github/workflows/ci.yml', '.github/workflows/cd.yml', 'deploy/helm/contest-helper/Chart.yaml', 'deploy/helm/contest-helper/values....",
-  "error": "Exit code 1\nTraceback (most recent call last):\n  File \"<string>\", line 2, in <module>\nModuleNotFoundError: No module named 'yaml'",
-  "timestamp": "2026-06-28T14:20:45.806Z",
-  "retry_count": 1
+  "tool_name": "mcp__plugin_oh-my-claudecode_t__lsp_diagnostics",
+  "tool_input_preview": "{\"file\":\"/Users/rental_mac_01/Desktop/keenee/services/web/tests/Chat.test.tsx\",\"severity\":\"error\"}",
+  "error": "Language server 'typescript-language-server' not found.\nInstall with: npm install -g typescript-language-server typescript",
+  "timestamp": "2026-06-29T06:48:07.482Z",
+  "retry_count": 5
 }

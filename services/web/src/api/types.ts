@@ -88,3 +88,37 @@ export interface WorkspaceRecommendation {
 export interface WorkspaceDetail extends Workspace {
   recommendations: WorkspaceRecommendation[];
 }
+
+// ---- 대화(채팅) ----
+
+/** 대화 속 한 줄 — MessageOut. role 은 "user" / "assistant". */
+export interface Message {
+  role: string; // "user" | "assistant"
+  content: string;
+}
+
+/** 채팅 폴링 응답 — ChatStateOut. pending=true 면 에이전트가 아직 답하는 중. */
+export interface ChatState {
+  conversation_id: number;
+  pending: boolean;
+  messages: Message[];
+  error: string | null;
+}
+
+/** POST /api/chat 응답: 대화 id + 처리 작업 id. */
+export interface ChatAccepted {
+  conversation_id: number;
+  job_id: string;
+}
+
+// ---- 계획(할 일) ----
+
+/** 워크스페이스 할 일 1건 — TaskOut. */
+export interface Task {
+  id: number;
+  title: string;
+  description: string | null;
+  status: string; // "todo" 등
+  assignee_id: number | null;
+  week_no: number | null;
+}
