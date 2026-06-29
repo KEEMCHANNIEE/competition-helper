@@ -1,7 +1,0 @@
-{
-  "tool_name": "mcp__plugin_oh-my-claudecode_t__lsp_diagnostics",
-  "tool_input_preview": "{\"file\":\"/Users/rental_mac_01/Desktop/keenee/services/web/tests/Chat.test.tsx\",\"severity\":\"error\"}",
-  "error": "Language server 'typescript-language-server' not found.\nInstall with: npm install -g typescript-language-server typescript",
-  "timestamp": "2026-06-29T06:48:07.482Z",
-  "retry_count": 5
-}

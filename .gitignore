@@ -23,3 +23,7 @@ services/web/dist/
 
 # misc
 .DS_Store
+
+# 도구/세션 폴더 (깃 제외)
+.omc/
+.claude/
