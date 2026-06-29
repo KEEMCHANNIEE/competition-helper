@@ -70,3 +70,4 @@
 {"t":0,"agent":"a07ec8e","agent_type":"general-purpose","event":"agent_stop","success":true,"duration_ms":321252}
 {"t":0,"agent":"a07ec8e","agent_type":"general-purpose","event":"agent_stop","success":true,"duration_ms":324617}
 {"t":0,"agent":"a07ec8e","agent_type":"general-purpose","event":"agent_stop","success":true,"duration_ms":327910}
+{"t":0,"agent":"aff0aba","agent_type":"unknown","event":"agent_stop","success":true}

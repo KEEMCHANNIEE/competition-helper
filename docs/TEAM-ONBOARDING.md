@@ -1,13 +1,12 @@
-# 팀 온보딩 — 처음 들어왔다면 이거부터
+# 팀 온보딩
 
-공모전 추천 + 대화로 계획까지 짜주는 AI 서비스를 만든다. 진짜 목적은 **배포·운영(MLOps) 연습**.
-전체 골격은 이미 다 짜여 있고, **각자 맡은 부분의 '빈칸'만 채우면 된다.**
+공모전 추천 + 대화 기반 계획·워크스페이스 서비스.
 
 ---
 
 ## 1. 모두 먼저 읽기
 
-1. `docs/BEGINNER-GUIDE.md` — 전체 큰 그림 (개발 처음이어도 이해되게)
+1. `docs/BEGINNER-GUIDE.md` — 전체 구조 개요
 2. `docs/DESIGN-V2-대화형에이전트.md` — 우리가 최종적으로 만들 것
 
 ## 2. 공통 규칙 (꼭 지킬 것)
@@ -66,7 +65,7 @@ uv run pytest services/worker -v   # (AI 담당 예시)
 ---
 
 ## 참고: 전체 문서 목록
-- `docs/BEGINNER-GUIDE.md` — 가장 쉬운 큰 그림
+- `docs/BEGINNER-GUIDE.md` — 전체 구조 개요
 - `docs/DESIGN-V2-대화형에이전트.md` — 최신 비전(대화형 코파일럿)
 - `docs/PROJECT-OVERVIEW.md` — 구획·과제·마일스톤
 - `docs/PROJECT-STRUCTURE.md` — 폴더·역할 분담

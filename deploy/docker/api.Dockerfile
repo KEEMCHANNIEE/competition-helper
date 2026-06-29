@@ -5,7 +5,7 @@
 #   - services/api (FastAPI, 포트 8000) 를 컨테이너로 만드는 설계도(Dockerfile).
 #   - 기동 직전에 `alembic upgrade head` 로 DB 스키마를 최신으로 맞춘 뒤 uvicorn 을 띄운다.
 #
-# ★★★ 초보자가 가장 많이 틀리는 부분: "빌드 컨텍스트(build context)" ★★★
+# ★★★ 자주 틀리는 부분: "빌드 컨텍스트(build context)" ★★★
 #   api 는 uv workspace 멤버라서 공유 라이브러리 libs/contest_helper_core 에 의존한다.
 #   따라서 Docker 빌드 컨텍스트는 반드시 "레포 루트(contest-helper/)" 여야 한다.
 #   (서비스 폴더 안이 아니라 루트에서 빌드해야 libs/ 를 COPY 할 수 있음)

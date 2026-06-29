@@ -1,4 +1,4 @@
-# contest-helper Terraform (GCP) — 초보자용 단계별 + 비용 절감 운영법
+# contest-helper Terraform (GCP) — 단계별 + 비용 절감 운영법
 
 🟡 **보너스 단계.** GCP 에 contest-helper 운영용 인프라(GKE + Cloud SQL + Artifact
 Registry + VPC)를 코드로 만든다. **돈이 나가는 영역**이므로 "켜고 → 쓰고 →

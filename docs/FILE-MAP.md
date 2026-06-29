@@ -159,10 +159,10 @@
 | `helm/.../configmap.yaml` | 비밀 아닌 환경변수. | ✅ |
 | `helm/.../secret.yaml` | 비밀 환경변수(키 등). | ✅ |
 | `helm/.../redis.yaml` | 개발용 단일 Redis. | ✅ |
-| `helm/README.md` | **초보자용:** kind 만들고 helm 배포하는 단계별 가이드. | ✅ |
+| `helm/README.md` | kind 만들고 helm 배포하는 단계별 가이드. | ✅ |
 | `terraform/main.tf` | 🟡 GCP 자원(GKE·Cloud SQL·Artifact Registry·VPC) 코드화. | ✅ |
 | `terraform/variables.tf` / `outputs.tf` | Terraform 입력 변수 / 출력값. | ✅ |
-| `terraform/README.md` | 🟡 apply/destroy·비용 절감 운영법(초보자용). | ✅ |
+| `terraform/README.md` | 🟡 apply/destroy·비용 절감 운영법. | ✅ |
 
 ---
 

@@ -1,4 +1,4 @@
-# contest-helper Helm 차트 — 초보자용 단계별 가이드
+# contest-helper Helm 차트 — 단계별 가이드
 
 이 문서는 **쿠버네티스(k8s)를 처음 만지는 사람**을 위해, 로컬에 가짜 클러스터
 (`kind`)를 만들고 contest-helper 를 Helm 으로 배포하는 전 과정을 한 줄씩 설명한다.
@@ -121,7 +121,7 @@ kubectl logs deploy/contest-helper-contest-helper-worker   # worker 로그
 
 ## 6. 브라우저에서 접속 (port-forward)
 
-Ingress 컨트롤러를 따로 안 깔았다면, 가장 쉬운 방법은 `port-forward` 다.
+Ingress 컨트롤러를 따로 안 깔았다면, 권장 방법은 `port-forward` 다.
 
 ```bash
 # api 를 로컬 8000 으로
