@@ -40,4 +40,4 @@ def build_registry() -> dict[str, Callable[..., Any]]:
         최소 ``search_competitions``, ``get_competition_detail``,
         ``semantic_search``, ``create_tasks`` 키를 갖는 도구 레지스트리.
     """
-    raise NotImplementedError("TODO(AI 담당): build_registry 를 구현하세요.")
+    return TOOLS
