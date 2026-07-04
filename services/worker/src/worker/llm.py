@@ -15,7 +15,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+from google import genai
+
 from contest_helper_core.config import Settings, get_settings
+
+GENERATE_MODEL = "gemini-2.5-flash"
 
 
 class LLMClient(ABC):
@@ -41,18 +45,21 @@ class GeminiClient(LLMClient):
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
-        # TODO(AI 담당): 설정 기반 클라이언트 초기화.
-        #   if self.settings.gemini_api_key:
-        #       self._client = genai.Client(api_key=self.settings.gemini_api_key)
-        #   else:
-        #       self._client = genai.Client(
-        #           vertexai=True,
-        #           project=self.settings.google_cloud_project,
-        #           location=self.settings.vertex_location,
-        #       )
+        if self.settings.gemini_api_key:
+            self._client = genai.Client(api_key=self.settings.gemini_api_key)
+        else:
+            self._client = genai.Client(
+                vertexai=True,
+                project=self.settings.google_cloud_project,
+                location=self.settings.vertex_location,
+            )
 
     def generate(self, prompt: str) -> str:
-        raise NotImplementedError("TODO(AI 담당): GeminiClient.generate 구현 필요.")
+        response = self._client.models.generate_content(
+            model=GENERATE_MODEL,
+            contents=prompt,
+        )
+        return response.text
 
     def embed(self, text: str) -> list[float]:
         raise NotImplementedError("TODO(AI 담당): GeminiClient.embed 구현 필요.")
