@@ -135,7 +135,10 @@ def chat(conversation_id: int, user_id: int) -> str:  # noqa: ARG001
 
 def _detect_intent(message: str) -> str:
     """마지막 사용자 메시지에서 의도를 감지한다."""
-    recommend_kws = ["추천", "찾아", "알려줘", "어떤 공모전", "공모전 있어", "뭐가 있"]
+    recommend_kws = [
+        "추천", "찾아", "알려줘", "어떤 공모전", "공모전 있", "뭐가 있",
+        "있을까", "있나", "있어요", "검색", "공모전 알",
+    ]
     plan_kws = ["계획", "일정", "준비", "할일", "태스크", "task"]
 
     for kw in recommend_kws:

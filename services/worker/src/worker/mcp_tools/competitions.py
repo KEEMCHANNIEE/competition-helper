@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import json
 from datetime import date
+from typing import Any
 
+from pydantic import BaseModel
 from sqlalchemy import text
 
 from contest_helper_core.competition_db import competition_session_factory
@@ -34,8 +36,45 @@ _SELECT = """
     FROM contests
 """
 
+_SELECT_DETAIL = """
+    SELECT id, title, organizer, host, host_type,
+           category, target, keywords,
+           start_date, end_date, homepage, poster_url,
+           total_prize_amount, first_prize_amount,
+           participation_type, team_config, is_career_benefit,
+           requirements, evaluation_criteria,
+           description, status
+    FROM contests
+"""
 
-def _parse_array(value) -> list:
+
+class CompetitionDetailOut(BaseModel):
+    """에이전트 내부용 공모전 상세 정보. CompetitionOut 보다 풍부한 필드를 포함한다."""
+
+    id: int
+    title: str
+    organizer: str | None = None
+    host: str | None = None
+    host_type: str | None = None
+    category: list[str] = []
+    target: list[str] = []
+    keywords: list[str] = []
+    start_date: date | None = None
+    deadline: date | None = None
+    url: str | None = None
+    poster_url: str | None = None
+    total_prize_amount: int | None = None
+    first_prize_amount: int | None = None
+    participation_type: str | None = None
+    team_config: str | None = None
+    is_career_benefit: bool | None = None
+    requirements: list[str] = []
+    evaluation_criteria: list[str] = []
+    description: str | None = None
+    status: str | None = None
+
+
+def _parse_array(value: Any) -> list:
     if value is None:
         return []
     if isinstance(value, list):
@@ -45,6 +84,24 @@ def _parse_array(value) -> list:
         return parsed if isinstance(parsed, list) else []
     except (json.JSONDecodeError, TypeError):
         return []
+
+
+def _parse_description(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        text = value.get("text") or value.get("content")
+        return str(text) if text else json.dumps(value, ensure_ascii=False)
+    if isinstance(value, str):
+        try:
+            d = json.loads(value)
+            if isinstance(d, dict):
+                text = d.get("text") or d.get("content")
+                return str(text) if text else json.dumps(d, ensure_ascii=False)
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return value
+    return str(value)
 
 
 def _row_to_out(row) -> CompetitionOut:
@@ -62,6 +119,32 @@ def _row_to_out(row) -> CompetitionOut:
         poster_url=row.poster_url,
         total_prize_amount=row.total_prize_amount,
         participation_type=row.participation_type,
+        status=row.status,
+    )
+
+
+def _row_to_detail(row) -> CompetitionDetailOut:
+    return CompetitionDetailOut(
+        id=row.id,
+        title=row.title,
+        organizer=row.organizer,
+        host=row.host,
+        host_type=row.host_type,
+        category=_parse_array(row.category),
+        target=_parse_array(row.target),
+        keywords=_parse_array(row.keywords),
+        start_date=row.start_date,
+        deadline=row.end_date,
+        url=row.homepage,
+        poster_url=row.poster_url,
+        total_prize_amount=row.total_prize_amount,
+        first_prize_amount=row.first_prize_amount,
+        participation_type=row.participation_type,
+        team_config=row.team_config,
+        is_career_benefit=row.is_career_benefit,
+        requirements=_parse_array(row.requirements),
+        evaluation_criteria=_parse_array(row.evaluation_criteria),
+        description=_parse_description(row.description),
         status=row.status,
     )
 
@@ -92,7 +175,7 @@ def search_competitions(
         params["kw"] = f"%{keyword}%"
 
     if open_only:
-        conditions.append("status = '진행중'")
+        conditions.append("status IN ('진행중', 'ACTIVE')")
 
     if before:
         conditions.append("end_date < :before")
@@ -108,19 +191,19 @@ def search_competitions(
     return [_row_to_out(r) for r in rows]
 
 
-def get_competition_detail(competition_id: int) -> CompetitionOut | None:
-    """단일 공모전 상세를 조회한다.
+def get_competition_detail(competition_id: int) -> CompetitionDetailOut | None:
+    """단일 공모전 상세를 조회한다 (에이전트 내부용 풍부한 정보 포함).
 
     Args:
         competition_id: 공모전 PK.
 
     Returns:
-        ``CompetitionOut`` (없으면 None).
+        ``CompetitionDetailOut`` (없으면 None).
     """
-    sql = text(f"{_SELECT} WHERE id = :id")
+    sql = text(f"{_SELECT_DETAIL} WHERE id = :id")
 
     factory = competition_session_factory()
     with factory() as session:
         row = session.execute(sql, {"id": competition_id}).fetchone()
 
-    return _row_to_out(row) if row else None
+    return _row_to_detail(row) if row else None
