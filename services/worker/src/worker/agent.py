@@ -26,6 +26,7 @@ from contest_helper_core.schemas import (
 )
 from worker.llm import GeminiClient
 from worker.mcp_tools.competitions import search_competitions
+from worker.mcp_tools.web_search import web_search
 
 
 def run(payload: RecommendJobPayload) -> list[RecommendationOut]:
@@ -111,11 +112,20 @@ def chat(conversation_id: int, user_id: int) -> str:  # noqa: ARG001
     if intent == "recommend":
         results = search_competitions(keyword=last_user_msg[:50], open_only=True, limit=5)
         if results:
-            tool_context = "\n\n[검색된 공모전]\n"
+            tool_context = "\n\n[DB 검색 결과 - 아래 목록만 사용하고 없는 공모전은 절대 만들지 마세요]\n"
             for c in results:
                 deadline = f"마감: {c.deadline}" if c.deadline else ""
                 categories = ", ".join(c.category[:2])
                 tool_context += f"- {c.title} ({deadline}, 카테고리: {categories})\n"
+        else:
+            # DB에 없으면 웹 검색으로 보완
+            web_results = web_search(f"{last_user_msg[:50]} 공모전 모집", max_results=5)
+            if web_results:
+                tool_context = "\n\n[웹 검색 결과 - 출처 URL을 함께 안내하세요]\n"
+                for r in web_results:
+                    tool_context += f"- {r.title}\n  {r.snippet}\n  출처: {r.url}\n"
+            else:
+                tool_context = "\n\n[검색 결과 없음: DB와 웹 검색 모두 관련 공모전을 찾지 못했습니다. 솔직히 안내하세요.]"
 
     history_text = "\n".join(
         f"{'사용자' if m.role == 'user' else '어시스턴트'}: {m.content}"
