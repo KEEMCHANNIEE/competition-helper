@@ -49,17 +49,18 @@ from contest_helper_core.schemas import (
     RecommendJobPayload,
     TaskIn,
 )
+from worker.llm import GeminiClient, LLMClient
 from worker.mcp_tools.registry import build_registry
 from worker.progress_agent import evaluate_progress
 
-# 의도 판단용 규칙 dict. LLM 없이도 "계획/추천/공부" 세 능력을 라우팅할 수 있게
-# 키워드 → 의도 매핑만으로 최소 동작시킨다(1단계). 나중에 llm.generate 기반
-# 분류로 교체해도 chat()의 나머지 구조는 그대로 재사용 가능하도록 분리해 둔다.
+# 의도 분류는 LLM(GeminiClient.generate)이 담당한다. 이 키워드 dict 는 LLM 호출이
+# 실패했을 때(자격증명 문제·네트워크 장애 등) 쓰는 규칙 기반 폴백 전용이다.
 _INTENT_KEYWORDS: dict[str, list[str]] = {
     "plan": ["계획", "일정", "역할", "스케줄", "마감까지"],
     "recommend": ["추천", "찾아줘", "공모전 알려줘", "뭐가 있어"],
     "progress": ["진행률", "진행 상황", "진행상황", "어디까지"],
 }
+_VALID_INTENTS = (*_INTENT_KEYWORDS.keys(), "study")
 
 def run(payload: RecommendJobPayload) -> list[RecommendationOut]:
     """추천 작업 1건을 실행해 추천 결과 리스트를 반환한다. (과제 stub)
@@ -78,6 +79,7 @@ def chat(
     user_id: int,
     *,
     session_factory: Callable[[], Session] | None = None,
+    llm: LLMClient | None = None,
 ) -> str:
     """대화형 에이전트의 한 턴을 실행해 어시스턴트 답변 텍스트를 반환한다. (과제 stub)
 
@@ -108,7 +110,7 @@ def chat(
         (m.content for m in reversed(history) if m.role == "user"), ""
     )
 
-    message: dict = _classify_intent(last_user_msg)  # {"intent": ..., "matched_on": ...}
+    message: dict = _classify_intent(last_user_msg, llm=llm)  # {"intent": ..., "matched_on": ...}
     tools = build_registry()
 
     if message["intent"] == "plan":
@@ -119,7 +121,7 @@ def chat(
         return _handle_recommend(last_user_msg, tools)
     if message["intent"] == "progress":
         return _handle_progress(
-            conversation_id, user_id, tools, session_factory=session_factory
+            conversation_id, user_id, tools, session_factory=session_factory, llm=llm
         )
     return _handle_study(last_user_msg)
 
@@ -129,12 +131,44 @@ def chat(
 # --------------------------------------------------------------------------- #
 
 
-def _classify_intent(text: str) -> dict:
-    """사용자의 마지막 메시지를 규칙 기반으로 추천/공부/계획 중 하나로 분류한다.
+def _classify_intent(text: str, *, llm: LLMClient | None = None) -> dict:
+    """사용자의 마지막 메시지를 LLM 으로 추천/공부/계획/진행률 중 하나로 분류한다.
 
-    search_agent 쪽 도구를 부를지, create_tasks 를 부를지 결정하는 dict 메시지.
-    나중에 llm.generate 기반 판단으로 바꿔도 반환 모양(dict)은 유지한다.
+    search_agent 쪽 도구를 부를지, create_tasks/evaluate_progress 를 부를지
+    결정하는 dict 메시지. LLM 호출이 실패하면(자격증명·네트워크 등) 규칙 기반
+    키워드 매칭으로 폴백한다(전체 대화가 죽지 않도록).
     """
+    if not text:
+        return {"intent": "study", "matched_on": "default"}
+
+    prompt = f"""당신은 공모전 준비를 돕는 챗봇의 의도 분류기입니다.
+아래 사용자 메시지를 다음 네 가지 중 정확히 하나로 분류하고, 그 단어 하나만 답하세요.
+다른 설명이나 문장부호 없이 단어 하나만 출력해야 합니다.
+
+- plan: 준비 계획·일정·역할 분담을 요청
+- recommend: 공모전 추천·검색을 요청
+- progress: 지금까지의 진행 상황·진척도를 물어봄
+- study: 그 외(개념 설명, 잡담 등)
+
+사용자 메시지: "{text}"
+
+분류 결과(단어 하나만):"""
+
+    try:
+        client = llm or GeminiClient()
+        raw = client.generate(prompt).strip().lower()
+    except Exception:
+        return _classify_intent_by_keyword(text)
+
+    for intent in _VALID_INTENTS:
+        if intent in raw:
+            return {"intent": intent, "matched_on": "llm"}
+    # LLM 이 넷 중 하나로 파싱 안 되는 답을 준 경우도 폴백.
+    return _classify_intent_by_keyword(text)
+
+
+def _classify_intent_by_keyword(text: str) -> dict:
+    """LLM 이 실패하거나 애매하게 답했을 때 쓰는 규칙 기반 폴백 분류."""
     for intent, keywords in _INTENT_KEYWORDS.items():
         if any(k in text for k in keywords):
             return {"intent": intent, "matched_on": "keyword"}
@@ -178,13 +212,14 @@ def _handle_progress(
     tools: dict,
     *,
     session_factory: Callable[[], Session] | None = None,
+    llm: LLMClient | None = None,
 ) -> str:
     workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
     if workspace_id is None:
         return "이 대화는 아직 워크스페이스에 연결돼 있지 않아요. 먼저 워크스페이스를 만들어 주세요."
 
     result = evaluate_progress(
-        workspace_id, user_id, session_factory=session_factory, tools=tools
+        workspace_id, user_id, session_factory=session_factory, tools=tools, llm=llm
     )
     return (
         f"현재 진행률은 {result.percent}%예요 "
