@@ -18,7 +18,3 @@ def test_chat_returns_assistant_text():
     assert reply  # 빈 문자열이 아니어야 함
 
 
-def test_chat_currently_not_implemented():
-    # 구현 완료 후 이 테스트는 삭제/교체한다(미구현 상태 가드).
-    with pytest.raises(NotImplementedError):
-        agent.chat(conversation_id=1, user_id=1)

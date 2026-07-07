@@ -25,7 +25,3 @@ def test_run_respects_limit():
     assert len(result) <= payload.limit
 
 
-def test_run_currently_not_implemented():
-    # 구현 완료 후 이 테스트는 삭제/교체한다(미구현 상태 가드).
-    with pytest.raises(NotImplementedError):
-        agent.run(RecommendJobPayload(job_id="a-3", user_id=1, limit=1))

@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     google_oauth_redirect_uri: str = "http://localhost:8000/auth/google/callback"
     session_secret: str = "dev-secret-change-me"
 
+    # 프론트엔드 URL (OAuth 콜백 후 리다이렉트)
+    frontend_url: str = "http://localhost:5173"
+
     # 관측(보너스)
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""

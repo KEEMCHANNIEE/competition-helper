@@ -15,6 +15,8 @@ from contest_helper_core.models import User
 from app.auth import oauth, service
 from app.deps import get_current_user, get_db
 
+from contest_helper_core.config import get_settings
+
 router = APIRouter(tags=["auth"])
 
 # 로그인 시작 시 발급한 CSRF state 를 잠깐 담아두는 쿠키.
@@ -77,7 +79,9 @@ def google_callback(
     user = service.upsert_user(db, email=email, name=info.get("name", ""))
 
     session_token = service.create_session_token(user.id)
-    resp = RedirectResponse(url="/", status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+    resp = RedirectResponse(
+        url=get_settings().frontend_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT
+    )
     resp.set_cookie(
         service.SESSION_COOKIE,
         session_token,

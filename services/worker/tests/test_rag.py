@@ -18,6 +18,3 @@ def test_semantic_search_returns_k_results():
     assert all(isinstance(c, CompetitionOut) for c in results)
 
 
-def test_semantic_search_currently_not_implemented():
-    with pytest.raises(NotImplementedError):
-        rag.semantic_search("query", k=5)
