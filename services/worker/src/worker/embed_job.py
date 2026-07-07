@@ -113,3 +113,8 @@ def run() -> int:
         session.commit()
 
     return count
+
+
+if __name__ == "__main__":
+    n = run()
+    print(f"임베딩 완료: {n}건")

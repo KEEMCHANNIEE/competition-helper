@@ -154,6 +154,7 @@ def search_competitions(
     *,
     open_only: bool = True,
     before: date | None = None,
+    participation: str | None = None,
     limit: int = 20,
 ) -> list[CompetitionOut]:
     """키워드/마감 조건으로 공모전을 검색한다.
@@ -171,11 +172,18 @@ def search_competitions(
     params: dict = {"limit": limit}
 
     if keyword:
-        conditions.append("(title ILIKE :kw OR description::text ILIKE :kw)")
+        conditions.append(
+            "(title ILIKE :kw OR category::text ILIKE :kw OR keywords::text ILIKE :kw)"
+        )
         params["kw"] = f"%{keyword}%"
 
     if open_only:
         conditions.append("status IN ('진행중', 'ACTIVE')")
+
+    if participation == "individual":
+        conditions.append("participation_type IN ('individual', 'individual_or_team')")
+    elif participation == "team":
+        conditions.append("participation_type IN ('team', 'individual_or_team')")
 
     if before:
         conditions.append("end_date < :before")

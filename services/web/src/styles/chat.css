@@ -374,6 +374,40 @@
   margin-top: 8px;
 }
 
+/* 드롭다운 (details/summary) */
+.chat-bubble.assistant details {
+  margin: 8px 0;
+  border: 1px solid #E5E7EB;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.chat-bubble.assistant summary {
+  padding: 10px 14px;
+  background: #F9FAFB;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+.chat-bubble.assistant summary::-webkit-details-marker { display: none; }
+.chat-bubble.assistant summary::before {
+  content: "▶";
+  font-size: 10px;
+  color: #6B7280;
+  transition: transform 0.2s;
+}
+.chat-bubble.assistant details[open] summary::before {
+  transform: rotate(90deg);
+}
+.chat-bubble.assistant details > *:not(summary) {
+  padding: 10px 14px;
+  font-size: 14px;
+}
+
 /* 로딩 말풍선 */
 .chat-loading span {
   display: inline-block;
