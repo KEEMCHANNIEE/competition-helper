@@ -57,7 +57,7 @@ def default_redis() -> Redis:
     """설정의 redis_url 로 동기 redis 클라이언트 생성."""
     import redis  # 지연 import: 테스트는 FakeRedis 주입으로 의존 회피.
 
-    return redis.from_url(get_settings().redis_url)
+    return redis.from_url(get_settings().redis_url, socket_timeout=BRPOP_TIMEOUT + 2)
 
 
 def default_agent_run() -> AgentRun:

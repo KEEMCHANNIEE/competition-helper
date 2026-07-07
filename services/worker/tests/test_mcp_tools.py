@@ -36,12 +36,3 @@ def test_semantic_search_tool_returns_competition_out_list():
     assert all(isinstance(c, CompetitionOut) for c in results)
 
 
-def test_tools_currently_not_implemented():
-    with pytest.raises(NotImplementedError):
-        registry.build_registry()
-    with pytest.raises(NotImplementedError):
-        competitions.search_competitions()
-    with pytest.raises(NotImplementedError):
-        competitions.get_competition_detail(1)
-    with pytest.raises(NotImplementedError):
-        semantic.semantic_search("q")

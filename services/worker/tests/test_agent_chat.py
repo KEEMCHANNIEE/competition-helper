@@ -13,3 +13,5 @@ def test_chat_returns_assistant_text():
     reply = agent.chat(conversation_id=1, user_id=1)
     assert isinstance(reply, str)
     assert reply  # 빈 문자열이 아니어야 함
+
+

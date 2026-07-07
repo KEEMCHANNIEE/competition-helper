@@ -21,7 +21,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+
 from worker.mcp_tools import competitions, progress, semantic, tasks
+from worker.mcp_tools import competitions, semantic, tasks, web_search as web_search_mod
+
 
 # 에이전트가 쓸 in-process 도구 목록. build_registry 가 이걸 dict 로 노출한다.
 # (build_registry 자체는 과제 stub 이지만, 등록 대상은 여기 한 곳에 모아 둔다.)
@@ -31,6 +34,7 @@ TOOLS: dict[str, Callable[..., Any]] = {
     "semantic_search": semantic.semantic_search,
     "create_tasks": tasks.create_tasks,
     "save_progress": progress.save_progress,
+    "web_search": web_search_mod.web_search,
 }
 
 
@@ -42,3 +46,4 @@ def build_registry() -> dict[str, Callable[..., Any]]:
         ``semantic_search``, ``create_tasks`` 키를 갖는 도구 레지스트리.
     """
     return dict(TOOLS)
+    return TOOLS

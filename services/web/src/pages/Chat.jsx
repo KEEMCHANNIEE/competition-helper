@@ -1,11 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { FiSend, FiExternalLink, FiPlus } from "react-icons/fi";
-import { mockMessages } from "../data/mockChat";
 import "../styles/chat.css";
-
-const MOCK_HISTORY = [
-  { id: 1, title: "직지 콘텐츠 공모전", messages: mockMessages },
-];
 
 const SUGGESTED = [
   { label: "공모전 추천해줘", sub: "내 관심사에 맞는 공모전 찾기" },
@@ -13,6 +8,26 @@ const SUGGESTED = [
   { label: "제출 전략 짜줘", sub: "마감일 기준 일정 계획" },
   { label: "Workspace 만들어줘", sub: "공모전 준비 공간 생성" },
 ];
+
+async function apiFetch(path, options = {}) {
+  const res = await fetch(path, { credentials: "include", ...options });
+  if (res.status === 401) {
+    window.location.href = "/auth/google/login";
+    return null;
+  }
+  return res;
+}
+
+async function pollChatState(conversationId, maxRetries = 30) {
+  for (let i = 0; i < maxRetries; i++) {
+    await new Promise((r) => setTimeout(r, 1500));
+    const res = await apiFetch(`/chat/${conversationId}`);
+    if (!res) return null;
+    const data = await res.json();
+    if (!data.pending) return data;
+  }
+  return null;
+}
 
 function AIIcon() {
   return (
@@ -38,9 +53,11 @@ function renderMarkdown(text) {
 }
 
 export default function Chat({ onGoToWorkspace }) {
-  const [history, setHistory] = useState(MOCK_HISTORY);
+  // history 항목: { id, title, messages, serverConvId }
+  const [history, setHistory] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [input, setInput] = useState("");
+  const [isPending, setIsPending] = useState(false);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
 
@@ -58,60 +75,89 @@ export default function Chat({ onGoToWorkspace }) {
     el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
   }, [input]);
 
-  const handleSend = (text) => {
+  const handleSend = async (text) => {
     const content = text || input.trim();
-    if (!content) return;
+    if (!content || isPending) return;
+    setInput("");
+    setIsPending(true);
 
-    // 새 채팅이면 히스토리에 추가
-    if (!activeId) {
-      const newChat = {
-        id: Date.now(),
-        title: content.slice(0, 20),
-        messages: [],
-      };
-      setHistory((prev) => [newChat, ...prev]);
-      setActiveId(newChat.id);
+    // 로컬 채팅 항목 확정
+    let chatLocalId = activeId;
+    let serverConvId = history.find((h) => h.id === activeId)?.serverConvId ?? null;
 
-      setTimeout(() => {
-        const userMsg = { id: Date.now(), role: "user", content };
-        const aiMsg = {
-          id: Date.now() + 1,
-          role: "assistant",
-          content: "네, 확인했습니다. 추가로 궁금한 점이 있으시면 말씀해 주세요.",
-          ...(content.includes("Workspace") ? { showWorkspaceButton: true } : {}),
-        };
-        setHistory((prev) =>
-          prev.map((h) =>
-            h.id === newChat.id ? { ...h, messages: [userMsg, aiMsg] } : h
-          )
-        );
-      }, 0);
+    if (!chatLocalId) {
+      chatLocalId = Date.now();
+      setActiveId(chatLocalId);
+      setHistory((prev) => [
+        { id: chatLocalId, title: content.slice(0, 20), messages: [], serverConvId: null },
+        ...prev,
+      ]);
+    }
 
-      setInput("");
+    // 사용자 메시지 즉시 표시
+    const userMsg = { id: Date.now(), role: "user", content };
+    const loadingMsg = { id: "loading", role: "assistant", content: "...", isLoading: true };
+    setHistory((prev) =>
+      prev.map((h) =>
+        h.id === chatLocalId
+          ? { ...h, messages: [...h.messages, userMsg, loadingMsg] }
+          : h
+      )
+    );
+
+    // POST /chat
+    const res = await apiFetch("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: content, conversation_id: serverConvId }),
+    });
+
+    if (!res) {
+      setIsPending(false);
       return;
     }
 
-    const userMsg = { id: Date.now(), role: "user", content };
+    const { conversation_id } = await res.json();
+
+    // serverConvId 저장
     setHistory((prev) =>
       prev.map((h) =>
-        h.id === activeId ? { ...h, messages: [...h.messages, userMsg] } : h
+        h.id === chatLocalId ? { ...h, serverConvId: conversation_id } : h
       )
     );
-    setInput("");
 
-    setTimeout(() => {
-      const aiMsg = {
-        id: Date.now() + 1,
+    // 답변 폴링
+    const state = await pollChatState(conversation_id);
+    setIsPending(false);
+
+    if (state) {
+      const serverMessages = state.messages.map((m, i) => ({
+        id: i,
+        role: m.role,
+        content: m.content,
+        ...(m.role === "assistant" && m.content.includes("Workspace")
+          ? { showWorkspaceButton: true }
+          : {}),
+      }));
+      setHistory((prev) =>
+        prev.map((h) =>
+          h.id === chatLocalId ? { ...h, messages: serverMessages } : h
+        )
+      );
+    } else {
+      const errMsg = {
+        id: Date.now(),
         role: "assistant",
-        content: "네, 확인했습니다. 추가로 궁금한 점이 있으시면 말씀해 주세요.",
-        ...(content.includes("Workspace") ? { showWorkspaceButton: true } : {}),
+        content: "응답을 받지 못했습니다. 잠시 후 다시 시도해 주세요.",
       };
       setHistory((prev) =>
         prev.map((h) =>
-          h.id === activeId ? { ...h, messages: [...h.messages, aiMsg] } : h
+          h.id === chatLocalId
+            ? { ...h, messages: h.messages.filter((m) => m.id !== "loading").concat(errMsg) }
+            : h
         )
       );
-    }, 800);
+    }
   };
 
   const handleNewChat = () => {
@@ -190,6 +236,10 @@ export default function Chat({ onGoToWorkspace }) {
                   <div>
                     {msg.role === "user" ? (
                       <div className="chat-bubble user">{msg.content}</div>
+                    ) : msg.isLoading ? (
+                      <div className="chat-bubble assistant chat-loading">
+                        <span>.</span><span>.</span><span>.</span>
+                      </div>
                     ) : (
                       <div
                         className="chat-bubble assistant"
@@ -219,13 +269,14 @@ export default function Chat({ onGoToWorkspace }) {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="메시지를 입력하세요..."
+                placeholder={isPending ? "답변을 기다리는 중..." : "메시지를 입력하세요..."}
                 rows={1}
+                disabled={isPending}
               />
               <button
-                className={`chat-send-btn ${input.trim() ? "active" : "inactive"}`}
+                className={`chat-send-btn ${input.trim() && !isPending ? "active" : "inactive"}`}
                 onClick={() => handleSend()}
-                disabled={!input.trim()}
+                disabled={!input.trim() || isPending}
               >
                 <FiSend size={15} />
               </button>
