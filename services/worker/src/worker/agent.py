@@ -16,13 +16,10 @@ import logging
 from collections.abc import Callable
 
 from sqlalchemy import select
-
-logger = logging.getLogger(__name__)
 from sqlalchemy.orm import Session, sessionmaker
 
 from contest_helper_core.db import get_engine
-from contest_helper_core.models import Conversation, Message
-from contest_helper_core.models import Message, User
+from contest_helper_core.models import Conversation, Message, User
 from contest_helper_core.schemas import (
     MessageOut,
     RecommendationOut,
@@ -30,8 +27,13 @@ from contest_helper_core.schemas import (
     TaskIn,
 )
 from worker.llm import GeminiClient, LLMClient
+from worker.mcp_tools.competitions import get_competition_detail, search_competitions
 from worker.mcp_tools.registry import build_registry
+from worker.mcp_tools.web_search import web_search
 from worker.progress_agent import evaluate_progress
+from worker.rag import semantic_search
+
+logger = logging.getLogger(__name__)
 
 # 의도 분류는 LLM(GeminiClient.generate)이 담당한다. 이 키워드 dict 는 LLM 호출이
 # 실패했을 때(자격증명 문제·네트워크 장애 등) 쓰는 규칙 기반 폴백 전용이다.
@@ -41,9 +43,6 @@ _INTENT_KEYWORDS: dict[str, list[str]] = {
     "progress": ["진행률", "진행 상황", "진행상황", "어디까지"],
 }
 _VALID_INTENTS = (*_INTENT_KEYWORDS.keys(), "study")
-from worker.mcp_tools.competitions import get_competition_detail, search_competitions
-from worker.mcp_tools.web_search import web_search
-from worker.rag import semantic_search
 
 
 def run(payload: RecommendJobPayload) -> list[RecommendationOut]:
@@ -66,14 +65,6 @@ def run(payload: RecommendJobPayload) -> list[RecommendationOut]:
     query_parts = (user.interests or []) + (user.skills or [])
     keyword = " ".join(query_parts[:3]) if query_parts else None
 
-def chat(
-    conversation_id: int,
-    user_id: int,
-    *,
-    session_factory: Callable[[], Session] | None = None,
-    llm: LLMClient | None = None,
-) -> str:
-    """대화형 에이전트의 한 턴을 실행해 어시스턴트 답변 텍스트를 반환한다. (과제 stub)
     candidates = search_competitions(keyword=keyword, open_only=True, limit=payload.limit * 3)
     if not candidates:
         return []
@@ -109,129 +100,30 @@ def chat(
     return recos
 
 
-def chat(conversation_id: int, user_id: int) -> str:  # noqa: ARG001
+def chat(
+    conversation_id: int,
+    user_id: int,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+    llm: LLMClient | None = None,
+) -> str:
     """대화형 에이전트의 한 턴을 실행해 어시스턴트 답변 텍스트를 반환한다.
 
-    의도(추천/공부/계획)를 마지막 메시지에서 감지하고, 필요 시 도구를 호출한 후
-    LLM 으로 최종 답변을 생성한다.
+    의도(추천/공부/계획/진행률)를 마지막 메시지에서 분류하고, 의도에 맞는
+    핸들러를 호출해 답변 텍스트를 반환한다.
 
     Args:
         conversation_id: 대화 세션 id.
         user_id: 말을 건 사용자 id.
 
     Returns:
-        어시스턴트 답변 텍스트.
+        어시스턴트가 사용자에게 보낼 답변 텍스트. (DB 저장은 배관이 한다)
     """
-    history = load_history(conversation_id)
+    history = load_history(conversation_id, session_factory=session_factory)
 
     if not history:
         return "안녕하세요! 공모전 추천, 정보 조회, 준비 계획 수립을 도와드릴 수 있어요. 어떤 도움이 필요하신가요?"
 
-    last_user_msg = next(
-        (m.content for m in reversed(history) if m.role == "user"), ""
-    )
-
-    # 1단계: 대화 전체에서 검색 키워드 + 팀 선호도 추출
-    search_keyword = _extract_search_keyword(history)
-    participation = _extract_participation(history)
-    logger.info("[검색] 추출된 키워드: %r | 참여형태: %r", search_keyword, participation)
-
-    # 2단계: 키워드 있으면 시맨틱 검색 후 participation 필터링, 없으면 전체 검색
-    if search_keyword:
-        logger.info("[검색] 시맨틱 검색 시작")
-        results = semantic_search(search_keyword, k=10)
-        if participation:
-            before = len(results)
-            results = _filter_by_participation(results, participation)
-            logger.info("[검색] 시맨틱 검색 %d건 → participation 필터 후 %d건", before, len(results))
-        else:
-            logger.info("[검색] 시맨틱 검색 결과: %d건", len(results))
-        results = results[:5]
-    else:
-        results = []
-
-    if not results:
-        logger.info("[검색] 시맨틱 검색 0건 → 전체 활성 공모전 검색")
-        results = search_competitions(keyword=None, open_only=True, participation=participation, limit=10)
-        logger.info("[검색] 전체 검색 결과: %d건", len(results))
-
-    if results:
-        logger.info("[검색] DB 결과 상세 조회: %s", [c.title for c in results])
-        tool_context = "\n\n[DB 검색 결과 - 아래 목록만 사용하고 없는 공모전은 절대 만들지 마세요]\n"
-        for c in results:
-            detail = get_competition_detail(c.id)
-            if detail:
-                deadline = f"마감: {detail.deadline}" if detail.deadline else ""
-                categories = ", ".join(detail.category[:3])
-                requirements = ", ".join(detail.requirements[:3]) if detail.requirements else "없음"
-                prize = f"{detail.first_prize_amount:,}원" if detail.first_prize_amount else "미정"
-                team = detail.team_config or "제한 없음"
-                tool_context += (
-                    f"- {detail.title}\n"
-                    f"  {deadline} | 카테고리: {categories}\n"
-                    f"  지원자격: {requirements}\n"
-                    f"  1등 상금: {prize} | 팀구성: {team}\n"
-                )
-            else:
-                deadline = f"마감: {c.deadline}" if c.deadline else ""
-                tool_context += f"- {c.title} ({deadline})\n"
-    else:
-        # 3단계: DB에 아무것도 없으면 웹 검색
-        logger.info("[검색] DB 0건 → 웹 검색: %r", last_user_msg[:50])
-        web_results = web_search(f"{last_user_msg[:50]} 공모전 모집", max_results=5)
-        logger.info("[검색] 웹 검색 결과: %d건", len(web_results))
-        if web_results:
-            logger.info("[검색] 웹 결과 사용: %s", [r.title for r in web_results])
-            tool_context = "\n\n[웹 검색 결과 - 출처 URL을 함께 안내하세요]\n"
-            for r in web_results:
-                tool_context += f"- {r.title}\n  {r.snippet}\n  출처: {r.url}\n"
-        else:
-            logger.warning("[검색] DB + 웹 검색 모두 0건")
-            tool_context = "\n\n[검색 결과 없음: DB와 웹 검색 모두 관련 공모전을 찾지 못했습니다. 솔직히 안내하세요.]"
-
-    history_text = "\n".join(
-        f"{'사용자' if m.role == 'user' else '어시스턴트'}: {m.content}"
-        for m in history
-    )
-
-    prompt = f"""당신은 공모전 도우미 AI입니다. 공모전 추천, 정보 안내, 준비 계획 수립을 도와드립니다.
-
-[공모전 추천 흐름 규칙]
-사용자가 공모전을 찾거나 추천을 요청할 때, 아래 순서를 따르세요.
-
-1. 요구사항 파악 단계 (검색 결과를 사용하지 않음):
-   대화 기록에서 아래 정보가 충분히 파악되지 않았으면 먼저 질문하세요.
-   - 관심 분야 (예: 개발, 디자인, 마케팅, 데이터 등)
-   - 참여 형태 (개인 / 팀, 팀이면 몇 명)
-   - 목표 (포트폴리오, 상금, 경험 등)
-   한 번에 모든 걸 물어보지 말고 자연스럽게 1~2가지씩 파악하세요.
-
-2. 검색 결과 활용 단계:
-   요구사항이 충분히 파악된 경우에만 아래 [DB 검색 결과]를 활용해 추천하세요.
-   검색 결과에 없는 공모전은 절대 만들어내지 마세요.
-
-[답변 형식 규칙]
-- 실제 정보를 전달할 때(공모전 목록, 계획, 팁 등 여러 항목)만 아래 구조를 사용하세요.
-- 여러 항목은 각각 <details><summary>제목</summary>내용</details> 형식으로 접을 수 있게 만드세요.
-- 전체 요약은 <details> 밖에 2~3문장으로 먼저 쓰세요.
-- 마크다운(**, ##, -)도 함께 사용 가능합니다.
-
-[대화 기록]
-{history_text}{tool_context}
-
-위 대화에서 어시스턴트의 다음 답변을 작성해 주세요."""
-
-    llm = GeminiClient()
-    return llm.generate(prompt)
-
-
-def _extract_search_keyword(history: list[MessageOut]) -> str | None:
-    """대화 전체 사용자 메시지에서 공모전 검색 키워드를 추출한다.
-
-    사용자가 여러 턴에 걸쳐 밝힌 분야·목표·조건을 합쳐 짧은 키워드로 만든다.
-    파악된 정보가 없으면 None 을 반환해 전체 검색으로 fallback 한다.
-    """
-    history = load_history(conversation_id, session_factory=session_factory)
     last_user_msg = next(
         (m.content for m in reversed(history) if m.role == "user"), ""
     )
@@ -364,6 +256,7 @@ def _handle_recommend(history: list[MessageOut], last_user_msg: str) -> str:
                 deadline = f"마감: {c.deadline}" if c.deadline else ""
                 tool_context += f"- {c.title} ({deadline})\n"
     else:
+        # DB에 아무것도 없으면 웹 검색
         logger.info("[검색] DB 0건 → 웹 검색: %r", last_user_msg[:50])
         web_results = web_search(f"{last_user_msg[:50]} 공모전 모집", max_results=5)
         logger.info("[검색] 웹 검색 결과: %d건", len(web_results))
@@ -508,7 +401,6 @@ def _filter_by_participation(
         allowed = {"team", "individual_or_team", ""}
 
     return [r for r in results if (r.participation_type or "") in allowed]
-
 
 
 # --------------------------------------------------------------------------- #
