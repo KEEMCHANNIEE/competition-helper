@@ -17,6 +17,7 @@ EMBED_MODEL = "gemini-embedding-001"
 EMBEDDING_DIM = 768
 
 
+
 class LLMClient(ABC):
     """LLM provider 추상 인터페이스. agent/rag 는 이 타입에만 의존한다."""
 

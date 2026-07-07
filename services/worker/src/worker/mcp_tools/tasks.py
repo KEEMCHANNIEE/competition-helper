@@ -15,17 +15,59 @@ TODO(AI 담당): 이 모듈을 구현해 아래 테스트를 통과시킬 것.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
+from sqlalchemy.orm import Session, sessionmaker
+
+from contest_helper_core.db import get_engine
+from contest_helper_core.models import Task
 from contest_helper_core.schemas import TaskIn, TaskOut
 
 
-def create_tasks(workspace_id: int, tasks: list[TaskIn]) -> list[TaskOut]:
+def _default_session_factory() -> sessionmaker[Session]:
+    return sessionmaker(bind=get_engine(), expire_on_commit=False)
+
+
+def create_tasks(
+    workspace_id: int,
+    tasks: list[TaskIn],
+    *,
+    session_factory: Callable[[], Session] | None = None,
+) -> list[TaskOut]:
     """계획(할 일 목록)을 워크스페이스에 ``Task`` 행으로 저장한다.
 
     Args:
         workspace_id: 할 일이 속할 워크스페이스 id.
         tasks: 저장할 할 일 입력 리스트.
+        session_factory: 세션 팩토리(미지정 시 App DB). 테스트/데모는 SQLite 팩토리 주입.
 
     Returns:
         저장되어 id 가 채워진 ``TaskOut`` 리스트.
     """
-    raise NotImplementedError("TODO(AI 담당): create_tasks 를 구현하세요.")
+    if session_factory is None:
+        session_factory = _default_session_factory()
+
+    with session_factory() as session:
+        rows = [
+            Task(
+                workspace_id=workspace_id,
+                title=t.title,
+                description=t.description,
+                assignee_id=t.assignee_id,
+                week_no=t.week_no,
+            )
+            for t in tasks
+        ]
+        session.add_all(rows)
+        session.commit()
+        return [
+            TaskOut(
+                id=row.id,
+                title=row.title,
+                description=row.description,
+                status=row.status,
+                assignee_id=row.assignee_id,
+                week_no=row.week_no,
+            )
+            for row in rows
+        ]

@@ -1,12 +1,9 @@
-"""create_tasks 도구 과제 계약 테스트 — 현재는 NotImplementedError 로 FAIL.
+"""create_tasks 도구 계약 테스트.
 
-TODO(AI 담당): worker/mcp_tools/tasks.py 를 구현해 이 테스트를 통과시킬 것.
 계획 능력의 "쓰기" 도구: 계획을 워크스페이스 할 일(Task)로 저장한다.
 """
 
 from __future__ import annotations
-
-import pytest
 
 from contest_helper_core.schemas import TaskIn, TaskOut
 from worker.mcp_tools import registry, tasks
@@ -28,9 +25,3 @@ def test_create_tasks_returns_saved_task_out():
 def test_create_tasks_registered_in_registry():
     # 레지스트리에 도구로 등록되어 있어야 한다(이름 계약).
     assert tasks.create_tasks is registry.TOOLS["create_tasks"]
-
-
-def test_create_tasks_currently_not_implemented():
-    # 구현 완료 후 이 테스트는 삭제/교체한다(미구현 상태 가드).
-    with pytest.raises(NotImplementedError):
-        tasks.create_tasks(workspace_id=1, tasks=[])

@@ -116,6 +116,26 @@ class Task(Base):
     )
 
 
+class WorkspaceProgress(Base):
+    """워크스페이스 에이전트가 계산한 사용자별 진행 상황 1건.
+
+    호출할 때마다 새 행을 쌓는다(이력). 최신값은 computed_at 최댓값으로 조회.
+    """
+
+    __tablename__ = "workspace_progress"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    percent: Mapped[int] = mapped_column(Integer)
+    comment: Mapped[str] = mapped_column(Text)
+    task_done: Mapped[int] = mapped_column(Integer)
+    task_total: Mapped[int] = mapped_column(Integer)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class Conversation(Base):
     """에이전트와의 대화 세션. (워크스페이스에 연결될 수 있음)"""
 
