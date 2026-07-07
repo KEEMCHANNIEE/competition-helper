@@ -110,3 +110,17 @@ class TaskIn(BaseModel):
     description: str | None = None
     assignee_id: int | None = None
     week_no: int | None = None
+
+
+# ---- 진행 상황(워크스페이스 에이전트) ----
+
+
+class ProgressOut(BaseModel):
+    """워크스페이스 에이전트가 계산·저장한 사용자별 진행 상황 1건."""
+
+    workspace_id: int
+    user_id: int
+    percent: int  # 0~100
+    comment: str  # LLM 코멘트(실패 시 규칙 기반 폴백)
+    task_done: int
+    task_total: int

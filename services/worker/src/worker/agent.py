@@ -1,13 +1,37 @@
-"""에이전트의 "머리" — 추천 + 대화 + 대화기억 로더(배관, 완전구현).
+"""에이전트의 "머리" — 추천(stub) + 대화(stub) + 대화기억 로더(배관, 완전구현).
 
 이 모듈은 두 가지 종류의 코드를 담는다.
 
-1) 에이전트 두뇌:
-   - ``run(payload)``  : 추천 능력.
-   - ``chat(conversation_id, user_id)`` : 대화형 능력(추천/공부/계획).
+1) **과제(stub)** — AI 담당이 채울 두뇌:
+   - ``run(payload)``  : 추천 능력. (기존)
+   - ``chat(conversation_id, user_id)`` : 대화형 능력(추천/공부/계획). (신규)
 
-2) 배관(완전 구현):
+2) **배관(완전 구현)** — 두뇌가 바로 쓸 수 있는 보조 함수:
    - ``load_history(conversation_id)`` : 대화 메시지 기록 로드.
+
+배관/과제 경계 원칙: 큐·상태기계·DB 영속화·기억 로드는 미리 구현해 두고,
+"무엇을 답할지"(추론/도구선택/LLM 호출)만 과제로 남긴다.
+
+추천 루프 의사코드 (TECH-SPEC §3 AI):
+
+    user = load_user(payload.user_id)                       # App DB 조회
+    query = build_query(user.interests, user.skills)        # 관심사·스킬 → 쿼리
+    candidates = semantic_search(query, k=payload.limit * 3)  # 후보 넉넉히
+    recos = []
+    for c in candidates[: payload.limit]:
+        reason = llm.generate(prompt(user, c))              # "왜 너에게 맞는지"
+        recos.append(
+            RecommendationOut(
+                competition_id=c.id, title=c.title, reason=reason
+            )
+        )
+    return recos
+
+고려사항(추천):
+    - 후보 0건이면 빈 리스트 반환(예외 X).
+    - LLM 실패 시 폴백 이유 문자열로 대체(작업 전체를 실패시키지 말 것).
+    - 반환은 반드시 ``list[RecommendationOut]`` 이고 길이는 ``payload.limit`` 이하.
+    - DB 저장은 배관(worker.main.handle_job)이 한다. 여기서 직접 저장하지 말 것.
 """
 
 from __future__ import annotations
@@ -18,19 +42,28 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from contest_helper_core.db import get_engine
-from contest_helper_core.models import Message, User
+from contest_helper_core.models import Conversation, Message, User
 from contest_helper_core.schemas import (
     MessageOut,
     RecommendationOut,
     RecommendJobPayload,
+    TaskIn,
 )
-from worker.llm import GeminiClient
-from worker.mcp_tools.competitions import search_competitions
-from worker.mcp_tools.web_search import web_search
+from worker.llm import GeminiClient, LLMClient
+from worker.mcp_tools.registry import build_registry
+from worker.progress_agent import evaluate_progress
 
+# 의도 분류는 LLM(GeminiClient.generate)이 담당한다. 이 키워드 dict 는 LLM 호출이
+# 실패했을 때(자격증명 문제·네트워크 장애 등) 쓰는 규칙 기반 폴백 전용이다.
+_INTENT_KEYWORDS: dict[str, list[str]] = {
+    "plan": ["계획", "일정", "역할", "스케줄", "마감까지"],
+    "recommend": ["추천", "찾아줘", "공모전 알려줘", "뭐가 있어"],
+    "progress": ["진행률", "진행 상황", "진행상황", "어디까지"],
+}
+_VALID_INTENTS = (*_INTENT_KEYWORDS.keys(), "study")
 
 def run(payload: RecommendJobPayload) -> list[RecommendationOut]:
-    """추천 작업 1건을 실행해 추천 결과 리스트를 반환한다.
+    """추천 작업 1건을 실행해 추천 결과 리스트를 반환한다. (과제 stub)
 
     Args:
         payload: 작업 입력 (job_id, user_id, limit).
@@ -49,7 +82,10 @@ def run(payload: RecommendJobPayload) -> list[RecommendationOut]:
     query_parts = (user.interests or []) + (user.skills or [])
     keyword = " ".join(query_parts[:3]) if query_parts else None
 
-    candidates = search_competitions(keyword=keyword, open_only=True, limit=payload.limit * 3)
+    tools = build_registry()
+    candidates = tools["search_competitions"](
+        keyword=keyword, open_only=True, limit=payload.limit * 3
+    )
     if not candidates:
         return []
 
@@ -84,80 +120,176 @@ def run(payload: RecommendJobPayload) -> list[RecommendationOut]:
     return recos
 
 
-def chat(conversation_id: int, user_id: int) -> str:  # noqa: ARG001
-    """대화형 에이전트의 한 턴을 실행해 어시스턴트 답변 텍스트를 반환한다.
+def chat(
+    conversation_id: int,
+    user_id: int,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+    llm: LLMClient | None = None,
+) -> str:
+    """대화형 에이전트의 한 턴을 실행해 어시스턴트 답변 텍스트를 반환한다. (과제 stub)
 
-    의도(추천/공부/계획)를 마지막 메시지에서 감지하고, 필요 시 도구를 호출한 후
-    LLM 으로 최종 답변을 생성한다.
+    하나의 에이전트가 모드(능력)만 바꿔 동작한다 (DESIGN-V2 §2):
+      - 추천: ``semantic_search`` / ``search_competitions`` 로 맞는 공모전 찾기.
+      - 공부: 개념·방법 설명. 특정 공모전 사실은 ``get_competition_detail`` 로 확인(환각 방지).
+      - 계획: 주제·일정·역할 정리 후 **``create_tasks`` 도구를 호출**해
+              워크스페이스에 할 일(Task)을 실제로 저장.
+
+    구현 의사코드:
+
+        history = load_history(conversation_id)             # 이전 대화 로드(배관)
+        intent = detect_intent(history)                     # 추천 / 공부 / 계획
+        tools = build_registry()                            # mcp_tools 레지스트리
+        # 의도에 맞는 도구를 골라 호출(계획이면 tools["create_tasks"](...))
+        reply = llm.generate(prompt(history, intent, tool_results))
+        return reply
 
     Args:
-        conversation_id: 대화 세션 id.
+        conversation_id: 대화 세션 id (App DB ``conversations.id``).
         user_id: 말을 건 사용자 id.
 
     Returns:
-        어시스턴트 답변 텍스트.
+        어시스턴트가 사용자에게 보낼 답변 텍스트. (DB 저장은 배관이 한다)
     """
-    history = load_history(conversation_id)
-
-    if not history:
-        return "안녕하세요! 공모전 추천, 정보 조회, 준비 계획 수립을 도와드릴 수 있어요. 어떤 도움이 필요하신가요?"
-
+    history = load_history(conversation_id, session_factory=session_factory)
     last_user_msg = next(
         (m.content for m in reversed(history) if m.role == "user"), ""
     )
 
-    intent = _detect_intent(last_user_msg)
+    message: dict = _classify_intent(last_user_msg, llm=llm)  # {"intent": ..., "matched_on": ...}
+    tools = build_registry()
 
-    tool_context = ""
-    if intent == "recommend":
-        results = search_competitions(keyword=last_user_msg[:50], open_only=True, limit=5)
-        if results:
-            tool_context = "\n\n[DB 검색 결과 - 아래 목록만 사용하고 없는 공모전은 절대 만들지 마세요]\n"
-            for c in results:
-                deadline = f"마감: {c.deadline}" if c.deadline else ""
-                categories = ", ".join(c.category[:2])
-                tool_context += f"- {c.title} ({deadline}, 카테고리: {categories})\n"
-        else:
-            # DB에 없으면 웹 검색으로 보완
-            web_results = web_search(f"{last_user_msg[:50]} 공모전 모집", max_results=5)
-            if web_results:
-                tool_context = "\n\n[웹 검색 결과 - 출처 URL을 함께 안내하세요]\n"
-                for r in web_results:
-                    tool_context += f"- {r.title}\n  {r.snippet}\n  출처: {r.url}\n"
-            else:
-                tool_context = "\n\n[검색 결과 없음: DB와 웹 검색 모두 관련 공모전을 찾지 못했습니다. 솔직히 안내하세요.]"
+    if message["intent"] == "plan":
+        return _handle_plan(
+            conversation_id, last_user_msg, tools, session_factory=session_factory
+        )
+    if message["intent"] == "recommend":
+        return _handle_recommend(last_user_msg, tools)
+    if message["intent"] == "progress":
+        return _handle_progress(
+            conversation_id, user_id, tools, session_factory=session_factory, llm=llm
+        )
+    return _handle_study(last_user_msg)
 
-    history_text = "\n".join(
-        f"{'사용자' if m.role == 'user' else '어시스턴트'}: {m.content}"
-        for m in history
+
+# --------------------------------------------------------------------------- #
+# 과제(stub) 내부 헬퍼: 의도 분류 + 능력별 처리
+# --------------------------------------------------------------------------- #
+
+
+def _classify_intent(text: str, *, llm: LLMClient | None = None) -> dict:
+    """사용자의 마지막 메시지를 LLM 으로 추천/공부/계획/진행률 중 하나로 분류한다.
+
+    search_agent 쪽 도구를 부를지, create_tasks/evaluate_progress 를 부를지
+    결정하는 dict 메시지. LLM 호출이 실패하면(자격증명·네트워크 등) 규칙 기반
+    키워드 매칭으로 폴백한다(전체 대화가 죽지 않도록).
+    """
+    if not text:
+        return {"intent": "study", "matched_on": "default"}
+
+    prompt = f"""당신은 공모전 준비를 돕는 챗봇의 의도 분류기입니다.
+아래 사용자 메시지를 다음 네 가지 중 정확히 하나로 분류하고, 그 단어 하나만 답하세요.
+다른 설명이나 문장부호 없이 단어 하나만 출력해야 합니다.
+
+- plan: 준비 계획·일정·역할 분담을 요청
+- recommend: 공모전 추천·검색을 요청
+- progress: 지금까지의 진행 상황·진척도를 물어봄
+- study: 그 외(개념 설명, 잡담 등)
+
+사용자 메시지: "{text}"
+
+분류 결과(단어 하나만):"""
+
+    try:
+        client = llm or GeminiClient()
+        raw = client.generate(prompt).strip().lower()
+    except Exception:
+        return _classify_intent_by_keyword(text)
+
+    for intent in _VALID_INTENTS:
+        if intent in raw:
+            return {"intent": intent, "matched_on": "llm"}
+    # LLM 이 넷 중 하나로 파싱 안 되는 답을 준 경우도 폴백.
+    return _classify_intent_by_keyword(text)
+
+
+def _classify_intent_by_keyword(text: str) -> dict:
+    """LLM 이 실패하거나 애매하게 답했을 때 쓰는 규칙 기반 폴백 분류."""
+    for intent, keywords in _INTENT_KEYWORDS.items():
+        if any(k in text for k in keywords):
+            return {"intent": intent, "matched_on": "keyword"}
+    return {"intent": "study", "matched_on": "default"}
+
+
+def _handle_plan(
+    conversation_id: int,
+    last_user_msg: str,
+    tools: dict,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+) -> str:
+    workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
+    if workspace_id is None:
+        return "이 대화는 아직 워크스페이스에 연결돼 있지 않아요. 먼저 워크스페이스를 만들어 주세요."
+
+    # 1단계(규칙 기반): 메시지 전체를 할 일 하나로 저장. 다음 단계에서 LLM으로
+    # 주차별 세부 계획(list[TaskIn])을 뽑도록 고도화한다.
+    plan = [TaskIn(title=last_user_msg[:200] or "계획 정리", week_no=1)]
+    saved = tools["create_tasks"](workspace_id=workspace_id, tasks=plan)
+    titles = ", ".join(t.title for t in saved)
+    return f"계획을 워크스페이스 할 일로 저장했어요: {titles}"
+
+
+def _handle_recommend(last_user_msg: str, tools: dict) -> str:
+    try:
+        results = tools["search_competitions"](keyword=last_user_msg or None, limit=3)
+    except NotImplementedError:
+        # search_agent 파트가 아직 구현 전이어도 workspace_agent 쪽 흐름은 막지 않는다.
+        return "추천 기능을 준비 중이에요. 조금만 기다려 주세요!"
+    if not results:
+        return "조건에 맞는 공모전을 못 찾았어요. 다른 키워드로 다시 물어봐 주세요."
+    lines = [f"- {c.title} (마감 {c.deadline})" for c in results]
+    return "이런 공모전은 어때요?\n" + "\n".join(lines)
+
+
+def _handle_progress(
+    conversation_id: int,
+    user_id: int,
+    tools: dict,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+    llm: LLMClient | None = None,
+) -> str:
+    workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
+    if workspace_id is None:
+        return "이 대화는 아직 워크스페이스에 연결돼 있지 않아요. 먼저 워크스페이스를 만들어 주세요."
+
+    result = evaluate_progress(
+        workspace_id, user_id, session_factory=session_factory, tools=tools, llm=llm
+    )
+    return (
+        f"현재 진행률은 {result.percent}%예요 "
+        f"(할 일 {result.task_total}개 중 {result.task_done}개 완료). {result.comment}"
     )
 
-    prompt = f"""당신은 공모전 도우미 AI입니다. 공모전 추천, 정보 안내, 준비 계획 수립을 도와드립니다.
 
-[대화 기록]
-{history_text}{tool_context}
-
-위 대화에서 어시스턴트의 다음 답변을 작성해 주세요."""
-
-    llm = GeminiClient()
-    return llm.generate(prompt)
+def _handle_study(last_user_msg: str) -> str:
+    # 1단계(규칙 기반) 플레이스홀더. 다음 단계에서 llm.generate 로 교체.
+    if not last_user_msg:
+        return "무엇을 도와드릴까요? '추천해줘' / '계획 짜줘' 처럼 말씀해 주세요."
+    return f"'{last_user_msg}'에 대해 알아보고 있어요. 조금 더 구체적으로 물어봐 주시겠어요?"
 
 
-def _detect_intent(message: str) -> str:
-    """마지막 사용자 메시지에서 의도를 감지한다."""
-    recommend_kws = [
-        "추천", "찾아", "알려줘", "어떤 공모전", "공모전 있", "뭐가 있",
-        "있을까", "있나", "있어요", "검색", "공모전 알",
-    ]
-    plan_kws = ["계획", "일정", "준비", "할일", "태스크", "task"]
-
-    for kw in recommend_kws:
-        if kw in message:
-            return "recommend"
-    for kw in plan_kws:
-        if kw in message:
-            return "plan"
-    return "study"
+def _load_workspace_id(
+    conversation_id: int,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+) -> int | None:
+    if session_factory is None:
+        session_factory = _default_session_factory()
+    with session_factory() as session:
+        conv = session.get(Conversation, conversation_id)
+        return conv.workspace_id if conv else None
 
 
 # --------------------------------------------------------------------------- #
@@ -175,14 +307,17 @@ def load_history(
     *,
     session_factory: Callable[[], Session] | None = None,
 ) -> list[MessageOut]:
-    """대화의 메시지 기록을 created_at 오름차순으로 로드한다.
+    """대화의 메시지 기록을 created_at 오름차순으로 로드한다. (배관, 과제 아님)
+
+    과제(chat)가 바로 쓸 수 있도록 미리 구현해 둔 보조 함수다.
+    DB 의 ``Message`` 행을 DTO(``MessageOut``)로 변환해 반환한다.
 
     Args:
         conversation_id: 대화 세션 id.
         session_factory: 세션 팩토리(미지정 시 App DB). 테스트는 SQLite 팩토리 주입.
 
     Returns:
-        시간순 ``MessageOut`` 리스트. 메시지가 없으면 빈 리스트.
+        시간순 ``MessageOut`` 리스트(role / content). 메시지가 없으면 빈 리스트.
     """
     if session_factory is None:
         session_factory = _default_session_factory()
