@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from contest_helper_core.schemas import CompetitionOut
+from worker.mcp_tools.competitions import CompetitionDetailOut
 
 
-def semantic_search(query: str, k: int = 5) -> list[CompetitionOut]:
+def semantic_search(query: str, k: int = 5) -> list[CompetitionDetailOut]:
     """rag.semantic_search 위임 도구.
 
     Args:
@@ -13,7 +13,7 @@ def semantic_search(query: str, k: int = 5) -> list[CompetitionOut]:
         k: 최대 결과 수.
 
     Returns:
-        CompetitionOut 리스트(최대 k 건).
+        CompetitionDetailOut 리스트(최대 k 건).
     """
     from worker import rag
 

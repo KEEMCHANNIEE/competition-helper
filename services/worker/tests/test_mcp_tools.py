@@ -9,6 +9,7 @@ import pytest
 
 from contest_helper_core.schemas import CompetitionOut
 from worker.mcp_tools import competitions, registry, semantic
+from worker.mcp_tools.competitions import CompetitionDetailOut
 
 
 def test_registry_exposes_expected_tools():
@@ -27,12 +28,12 @@ def test_search_competitions_returns_competition_out_list():
 
 def test_get_competition_detail_returns_competition_out():
     detail = competitions.get_competition_detail(1)
-    assert detail is None or isinstance(detail, CompetitionOut)
+    assert detail is None or isinstance(detail, CompetitionDetailOut)
 
 
 def test_semantic_search_tool_returns_competition_out_list():
     results = semantic.semantic_search("AI 해커톤", k=3)
     assert isinstance(results, list)
-    assert all(isinstance(c, CompetitionOut) for c in results)
+    assert all(isinstance(c, CompetitionDetailOut) for c in results)
 
 

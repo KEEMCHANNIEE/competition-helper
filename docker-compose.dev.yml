@@ -75,6 +75,7 @@ services:
     build:
       context: .
       dockerfile: deploy/docker/worker.Dockerfile
+    restart: unless-stopped
     volumes:
       - ./services/worker/src:/app/services/worker/src
       - ./libs/contest_helper_core/src:/app/libs/contest_helper_core/src

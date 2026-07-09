@@ -3,7 +3,7 @@
 흐름:
     1. LLMClient.embed(query) 로 쿼리 임베딩.
     2. App DB embeddings 테이블에서 cosine_distance top-k 검색.
-    3. competition_id 로 공모전 상세 조회 후 CompetitionOut 리스트 반환.
+    3. competition_id 로 공모전 상세 조회 후 CompetitionDetailOut 리스트 반환.
 """
 
 from __future__ import annotations
@@ -13,12 +13,11 @@ from sqlalchemy.orm import sessionmaker
 
 from contest_helper_core.db import get_engine
 from contest_helper_core.models import Embedding
-from contest_helper_core.schemas import CompetitionOut
 from worker.llm import GeminiClient
-from worker.mcp_tools.competitions import get_competition_detail
+from worker.mcp_tools.competitions import CompetitionDetailOut, get_competition_detail
 
 
-def semantic_search(query: str, k: int) -> list[CompetitionOut]:
+def semantic_search(query: str, k: int) -> list[CompetitionDetailOut]:
     """쿼리와 의미적으로 유사한 공모전 top-k 를 반환한다.
 
     Args:
@@ -26,7 +25,7 @@ def semantic_search(query: str, k: int) -> list[CompetitionOut]:
         k: 반환할 최대 결과 수.
 
     Returns:
-        유사도 내림차순 CompetitionOut 리스트(최대 k 건).
+        유사도 내림차순 CompetitionDetailOut 리스트(최대 k 건).
     """
     llm = GeminiClient()
     vec = llm.embed(query)
@@ -39,7 +38,7 @@ def semantic_search(query: str, k: int) -> list[CompetitionOut]:
             .limit(k)
         ).scalars().all()
 
-    results: list[CompetitionOut] = []
+    results: list[CompetitionDetailOut] = []
     for row in rows:
         detail = get_competition_detail(row.competition_id)
         if detail:

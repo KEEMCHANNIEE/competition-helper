@@ -7,14 +7,14 @@ from __future__ import annotations
 
 import pytest
 
-from contest_helper_core.schemas import CompetitionOut
 from worker import rag
+from worker.mcp_tools.competitions import CompetitionDetailOut
 
 
 def test_semantic_search_returns_k_results():
     results = rag.semantic_search("AI 해커톤", k=3)
     assert isinstance(results, list)
     assert len(results) <= 3
-    assert all(isinstance(c, CompetitionOut) for c in results)
+    assert all(isinstance(c, CompetitionDetailOut) for c in results)
 
 
