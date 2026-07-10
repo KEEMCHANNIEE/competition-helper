@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FiPlus, FiCheck } from "react-icons/fi";
+import { FiPlus, FiCheck, FiMessageSquare } from "react-icons/fi";
 
 function formatDate(dateStr) {
   return dateStr.replace(/-/g, ".");
@@ -28,7 +28,8 @@ function isThisWeek(dateStr) {
   return d >= sun && d <= sat;
 }
 
-function TaskRow({ task, onToggle }) {
+function TaskRow({ task, onToggle, onStartTask }) {
+  const clickable = !!onStartTask && !task.completed;
   return (
     <tr>
       <td>
@@ -41,12 +42,25 @@ function TaskRow({ task, onToggle }) {
         </div>
       </td>
       <td>
-        <span style={{
-          color: task.completed ? "#9CA3AF" : "#111827",
-          textDecoration: task.completed ? "line-through" : "none",
-          fontWeight: 500,
-        }}>
+        <span
+          onClick={clickable ? () => onStartTask(task) : undefined}
+          title={clickable ? "AI에게 이 작업 시작 방법 물어보기" : undefined}
+          style={{
+            color: task.completed ? "#9CA3AF" : "#111827",
+            textDecoration: task.completed ? "line-through" : "none",
+            fontWeight: 500,
+            cursor: clickable ? "pointer" : "default",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+          onMouseEnter={(e) => clickable && (e.currentTarget.style.color = "#2563EB")}
+          onMouseLeave={(e) =>
+            clickable && (e.currentTarget.style.color = task.completed ? "#9CA3AF" : "#111827")
+          }
+        >
           {task.title}
+          {clickable && <FiMessageSquare size={12} style={{ opacity: 0.5, flexShrink: 0 }} />}
         </span>
       </td>
       <td><span className="ws-assignee">{task.assignee}</span></td>
@@ -56,7 +70,7 @@ function TaskRow({ task, onToggle }) {
   );
 }
 
-function TaskTable({ tasks, onToggleTask, emptyText }) {
+function TaskTable({ tasks, onToggleTask, onStartTask, emptyText }) {
   if (tasks.length === 0) {
     return <div className="ws-empty" style={{ padding: "20px 0" }}>{emptyText}</div>;
   }
@@ -73,14 +87,14 @@ function TaskTable({ tasks, onToggleTask, emptyText }) {
       </thead>
       <tbody>
         {tasks.map((t) => (
-          <TaskRow key={t.id} task={t} onToggle={onToggleTask} />
+          <TaskRow key={t.id} task={t} onToggle={onToggleTask} onStartTask={onStartTask} />
         ))}
       </tbody>
     </table>
   );
 }
 
-export default function TaskSection({ tasks, onToggleTask, onAddTask }) {
+export default function TaskSection({ tasks, onToggleTask, onAddTask, onStartTask }) {
   const [showForm, setShowForm] = useState(false);
   const [newTask, setNewTask] = useState({ title: "", assignee: "", priority: "Medium", dueDate: "" });
 
@@ -157,6 +171,7 @@ export default function TaskSection({ tasks, onToggleTask, onAddTask }) {
           <TaskTable
             tasks={thisWeekTasks}
             onToggleTask={onToggleTask}
+            onStartTask={onStartTask}
             emptyText="이번 주 마감 Task가 없어요"
           />
         </div>
@@ -171,6 +186,7 @@ export default function TaskSection({ tasks, onToggleTask, onAddTask }) {
           <TaskTable
             tasks={allTasks}
             onToggleTask={onToggleTask}
+            onStartTask={onStartTask}
             emptyText="Task가 없어요"
           />
         </div>

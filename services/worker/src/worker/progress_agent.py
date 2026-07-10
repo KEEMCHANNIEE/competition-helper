@@ -20,7 +20,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from contest_helper_core.db import get_engine
-from contest_helper_core.models import Conversation, Message, Task, Workspace
+from contest_helper_core.models import (
+    Conversation,
+    Message,
+    Task,
+    User,
+    Workspace,
+    WorkspaceMember,
+    WorkspaceProgress,
+)
 from contest_helper_core.schemas import ProgressOut
 from worker.llm import GeminiClient, LLMClient
 from worker.mcp_tools.registry import build_registry
@@ -194,3 +202,142 @@ def _fallback_comment(percent: int, task_total: int, competition) -> str:
 
 def _default_session_factory() -> sessionmaker[Session]:
     return sessionmaker(bind=get_engine(), expire_on_commit=False)
+
+
+# --------------------------------------------------------------------------- #
+# 주간 리포트 (S-03) — 신규 저장 없이 조회/집계만
+# --------------------------------------------------------------------------- #
+
+
+def weekly_report(
+    workspace_id: int,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+) -> dict:
+    """워크스페이스의 주간 진행 리포트를 집계한다(신규 저장 없음, 읽기 전용). (S-03 STEP01)
+
+    - 전체 진행률: 워크스페이스 Task 완료 비율.
+    - 팀원별 진행률: 각 멤버의 최신 ``WorkspaceProgress`` 스냅샷(없으면 배정 Task 기준).
+    - 미완료 할 일: todo 상태 Task 제목 목록.
+
+    자동 실행(일요일 자정 cron)은 백엔드 배관이 이 함수를 호출하는 식으로 붙이면 된다.
+    """
+    if session_factory is None:
+        session_factory = _default_session_factory()
+
+    with session_factory() as session:
+        tasks = (
+            session.execute(select(Task).where(Task.workspace_id == workspace_id))
+            .scalars()
+            .all()
+        )
+        members = (
+            session.execute(
+                select(WorkspaceMember).where(
+                    WorkspaceMember.workspace_id == workspace_id
+                )
+            )
+            .scalars()
+            .all()
+        )
+        snaps = (
+            session.execute(
+                select(WorkspaceProgress)
+                .where(WorkspaceProgress.workspace_id == workspace_id)
+                .order_by(WorkspaceProgress.computed_at.desc())
+            )
+            .scalars()
+            .all()
+        )
+        member_ids = [m.user_id for m in members]
+        users = (
+            session.execute(select(User).where(User.id.in_(member_ids)))
+            .scalars()
+            .all()
+        )
+        name_by_id = {u.id: (u.name or u.email) for u in users}
+
+    # user_id -> 최신 스냅샷(내림차순 정렬이므로 처음 본 게 최신).
+    latest_by_user: dict[int, WorkspaceProgress] = {}
+    for snap in snaps:
+        latest_by_user.setdefault(snap.user_id, snap)
+
+    total = len(tasks)
+    done = sum(1 for t in tasks if t.status == "done")
+    overall_percent = round(done / total * 100) if total else 0
+
+    member_reports = []
+    for m in members:
+        name = name_by_id.get(m.user_id, f"멤버 {m.user_id}")
+        # 배정된 Task 기준을 우선 사용(스냅샷은 개인이 '진행 상황' 물었을 때만 생겨 편향됨).
+        mine = [t for t in tasks if t.assignee_id == m.user_id]
+        if mine:
+            md = sum(1 for t in mine if t.status == "done")
+            member_reports.append(
+                {
+                    "user_id": m.user_id,
+                    "name": name,
+                    "percent": round(md / len(mine) * 100),
+                    "done": md,
+                    "total": len(mine),
+                    # 팀원별 미완료 할 일 제목(S-03 STEP01 "미완료" 섹션용).
+                    "incomplete": [t.title for t in mine if t.status != "done"],
+                }
+            )
+        else:
+            snap = latest_by_user.get(m.user_id)
+            member_reports.append(
+                {
+                    "user_id": m.user_id,
+                    "name": name,
+                    "percent": snap.percent if snap else 0,
+                    "done": snap.task_done if snap else 0,
+                    "total": snap.task_total if snap else 0,
+                    "incomplete": [],
+                }
+            )
+
+    incomplete = [t.title for t in tasks if t.status != "done"][:10]
+    return {
+        "workspace_id": workspace_id,
+        "overall": {"percent": overall_percent, "done": done, "total": total},
+        "members": member_reports,
+        "incomplete_tasks": incomplete,
+    }
+
+
+def format_weekly_report(report: dict) -> str:
+    """weekly_report 결과를 사람이 읽기 좋고 프론트가 파싱하기 쉬운 텍스트로 만든다.
+
+    형식(주차 제목은 호출부에서 앞에 붙인다):
+        전체 진행률: 63% (5/8 완료)
+
+        [팀원별 진행률]
+        - 동영 (팀장): 100% (2/2)
+        ...
+
+        [미완료]
+        - 유진: 데이터 정리
+        - 채은: 전체 미완료
+    """
+    o = report["overall"]
+    lines = [f"전체 진행률: {o['percent']}% ({o['done']}/{o['total']} 완료)"]
+    if report["members"]:
+        lines += ["", "[팀원별 진행률]"]
+        lines += [
+            f"- {m['name']}: {m['percent']}% ({m['done']}/{m['total']})"
+            for m in report["members"]
+        ]
+    # 미완료(팀원별): 일부만 남았으면 제목 나열, 하나도 못 했으면 "전체 미완료".
+    inc_lines: list[str] = []
+    for m in report["members"]:
+        inc = m.get("incomplete") or []
+        if not inc:
+            continue
+        if m["done"] == 0 and m["total"]:
+            inc_lines.append(f"- {m['name']}: 전체 미완료")
+        else:
+            inc_lines.append(f"- {m['name']}: {', '.join(inc)}")
+    if inc_lines:
+        lines += ["", "[미완료]"] + inc_lines
+    return "\n".join(lines)

@@ -1,11 +1,11 @@
-import { FiCheck } from "react-icons/fi";
+import { FiCheck, FiMessageSquare } from "react-icons/fi";
 
 function formatDate(dateStr) {
   const d = new Date(dateStr);
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
-export default function Dashboard({ workspace, onMenuChange, onToggleTask }) {
+export default function Dashboard({ workspace, onMenuChange, onToggleTask, onStartTask }) {
   const { contest, tasks, schedules, meetings, insights } = workspace;
 
   const todayTasks = tasks.filter((t) => !t.completed).slice(0, 5);
@@ -64,7 +64,22 @@ export default function Dashboard({ workspace, onMenuChange, onToggleTask }) {
                 >
                   {t.completed && <FiCheck size={10} />}
                 </div>
-                <span className={`ws-task-text${t.completed ? " done" : ""}`}>{t.title}</span>
+                <span
+                  className={`ws-task-text${t.completed ? " done" : ""}`}
+                  onClick={onStartTask ? () => onStartTask(t) : undefined}
+                  title={onStartTask ? "AI에게 이 작업 시작 방법 물어보기" : undefined}
+                  style={{
+                    cursor: onStartTask ? "pointer" : "default",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                  onMouseEnter={(e) => onStartTask && (e.currentTarget.style.color = "#2563EB")}
+                  onMouseLeave={(e) => onStartTask && (e.currentTarget.style.color = "")}
+                >
+                  {t.title}
+                  {onStartTask && <FiMessageSquare size={11} style={{ opacity: 0.5, flexShrink: 0 }} />}
+                </span>
                 <span className="ws-task-due">{formatDate(t.dueDate)}</span>
               </div>
             ))}

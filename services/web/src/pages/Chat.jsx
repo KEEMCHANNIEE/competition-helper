@@ -52,17 +52,64 @@ function renderMarkdown(text) {
     .replace(/`([^`]+)`/g, "<code>$1</code>");
 }
 
-export default function Chat({ onGoToWorkspace }) {
+export default function Chat({ onGoToWorkspace, pendingChat, onPendingConsumed }) {
   // history 항목: { id, title, messages, serverConvId }
   const [history, setHistory] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [input, setInput] = useState("");
   const [isPending, setIsPending] = useState(false);
+  const [me, setMe] = useState(null); // 현재 로그인 사용자(팀장 여부 판별용)
+  const [approving, setApproving] = useState(false);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
+  const lastPendingNonce = useRef(null); // 같은 할 일-클릭이 중복 전송되지 않도록
 
   const activeChat = history.find((h) => h.id === activeId);
   const messages = activeChat?.messages || [];
+
+  // 현재 사용자 정보(팀장 여부 판별용).
+  useEffect(() => {
+    (async () => {
+      const res = await apiFetch("/me");
+      if (res && res.ok) setMe(await res.json());
+    })();
+  }, []);
+
+  // 마운트 시 서버에서 대화를 복원한다(새로고침·팀원 전환 후에도 대화 유지).
+  useEffect(() => {
+    (async () => {
+      const res = await apiFetch("/chat");
+      if (!res) return;
+      const convos = await res.json();
+      if (!convos.length) return;
+      const loaded = convos.map((c) => ({
+        id: `srv-${c.conversation_id}`,
+        title: c.title,
+        serverConvId: c.conversation_id,
+        messages: c.messages.map((m, i) => ({
+          id: `${c.conversation_id}-${i}`,
+          role: m.role,
+          content: m.content,
+        })),
+      }));
+      setHistory(loaded);
+      setActiveId(loaded[0].id); // 가장 최근 대화를 활성화
+    })();
+  }, []);
+
+  // 워크스페이스에서 할 일을 클릭하면(S-02 STEP01) 그 할 일을 어떻게 시작할지 묻는
+  // 메시지를 새 대화로 자동 전송한다. workspace_id 를 실어 대화를 워크스페이스에 연결해,
+  // 백엔드가 공모전 맥락으로 작업 방향을 답하도록 한다.
+  useEffect(() => {
+    if (!pendingChat || pendingChat.nonce === lastPendingNonce.current) return;
+    lastPendingNonce.current = pendingChat.nonce;
+    handleSend(pendingChat.text, {
+      workspaceId: pendingChat.workspaceId,
+      forceNew: true,
+    });
+    onPendingConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingChat]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -70,20 +117,26 @@ export default function Chat({ onGoToWorkspace }) {
 
   useEffect(() => {
     const el = textareaRef.current;
-    if (!el) return;
+    // 숨겨진 상태(워크스페이스 탭이라 display:none 조상)에서는 scrollHeight 가 0 이라
+    // 높이를 0px 로 만들어 입력칸이 먹통이 된다 → 보일 때만 높이를 조절한다.
+    if (!el || el.offsetParent === null) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
   }, [input]);
 
-  const handleSend = async (text) => {
+  // opts.workspaceId: 이 대화를 워크스페이스에 연결(할 일 조언은 공모전 맥락이 필요).
+  // opts.forceNew: 항상 새 대화로 시작(할 일 클릭 시).
+  const handleSend = async (text, opts = {}) => {
     const content = text || input.trim();
     if (!content || isPending) return;
     setInput("");
     setIsPending(true);
 
     // 로컬 채팅 항목 확정
-    let chatLocalId = activeId;
-    let serverConvId = history.find((h) => h.id === activeId)?.serverConvId ?? null;
+    let chatLocalId = opts.forceNew ? null : activeId;
+    let serverConvId = opts.forceNew
+      ? null
+      : history.find((h) => h.id === activeId)?.serverConvId ?? null;
 
     if (!chatLocalId) {
       chatLocalId = Date.now();
@@ -109,7 +162,11 @@ export default function Chat({ onGoToWorkspace }) {
     const res = await apiFetch("/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: content, conversation_id: serverConvId }),
+      body: JSON.stringify({
+        message: content,
+        conversation_id: serverConvId,
+        ...(opts.workspaceId ? { workspace_id: opts.workspaceId } : {}),
+      }),
     });
 
     if (!res) {
@@ -131,17 +188,31 @@ export default function Chat({ onGoToWorkspace }) {
     setIsPending(false);
 
     if (state) {
-      const serverMessages = state.messages.map((m, i) => ({
-        id: i,
-        role: m.role,
-        content: m.content,
-        ...(m.role === "assistant" && m.content.includes("Workspace")
-          ? { showWorkspaceButton: true }
-          : {}),
-      }));
+      // user/assistant 만 말풍선으로. role="proposal"(계획 변경 제안, JSON)은 승인 카드로 뽑아낸다.
+      // log/topic/report 등 내부 기록은 채팅에 노출하지 않는다.
+      const bubbles = [];
+      let proposal = null;
+      for (const m of state.messages) {
+        if (m.role === "proposal") {
+          try {
+            const p = JSON.parse(m.content);
+            if (!p.applied) proposal = p;
+          } catch { /* 파싱 실패 무시 */ }
+          continue;
+        }
+        if (m.role !== "user" && m.role !== "assistant") continue;
+        bubbles.push({
+          id: bubbles.length,
+          role: m.role,
+          content: m.content,
+          ...(m.role === "assistant" && m.content.includes("Workspace")
+            ? { showWorkspaceButton: true }
+            : {}),
+        });
+      }
       setHistory((prev) =>
         prev.map((h) =>
-          h.id === chatLocalId ? { ...h, messages: serverMessages } : h
+          h.id === chatLocalId ? { ...h, messages: bubbles, proposal } : h
         )
       );
     } else {
@@ -157,6 +228,44 @@ export default function Chat({ onGoToWorkspace }) {
             : h
         )
       );
+    }
+  };
+
+  // 팀장이 AI 제안(계획 변경)을 승인 → 백엔드가 실제 계획에 반영(팀장만 허용). (S-03 STEP02)
+  const handleApprove = async (proposal) => {
+    if (approving || !proposal) return;
+    setApproving(true);
+    try {
+      const res = await apiFetch(
+        `/workspaces/${proposal.workspace_id}/proposals/approve`,
+        { method: "POST" }
+      );
+      if (!res) return;
+      let msg;
+      if (!res.ok) {
+        msg = "승인에 실패했어요. 이 조치는 팀장만 승인할 수 있어요.";
+      } else {
+        const data = await res.json();
+        msg = data.already_applied
+          ? `이미 반영된 제안이에요 — ${data.label}`
+          : `✅ 계획에 반영했어요 — ${data.label} (과제 ${data.moved}건을 다음 주로 이동).`;
+      }
+      setHistory((prev) =>
+        prev.map((h) =>
+          h.id === activeId
+            ? {
+                ...h,
+                proposal: res.ok ? null : h.proposal,
+                messages: [
+                  ...h.messages,
+                  { id: `appr-${Date.now()}`, role: "assistant", content: msg },
+                ],
+              }
+            : h
+        )
+      );
+    } finally {
+      setApproving(false);
     }
   };
 
@@ -254,6 +363,55 @@ export default function Chat({ onGoToWorkspace }) {
                   </div>
                 </div>
               ))}
+
+              {/* AI 계획 변경 제안 → 팀장 승인 카드 (S-03 STEP02) */}
+              {activeChat?.proposal && (
+                <div className="chat-msg-row assistant">
+                  <div className="chat-ai-icon"><AIIcon /></div>
+                  <div
+                    style={{
+                      border: "1px solid #C7D2FE",
+                      background: "#EEF2FF",
+                      borderRadius: 12,
+                      padding: "14px 16px",
+                      maxWidth: "82%",
+                    }}
+                  >
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#3730A3", marginBottom: 4 }}>
+                      📌 AI 제안
+                    </div>
+                    <div style={{ fontSize: 14, color: "#374151", marginBottom: 12 }}>
+                      {activeChat.proposal.label}
+                    </div>
+                    {me && me.id === activeChat.proposal.owner_id ? (
+                      <button
+                        onClick={() => handleApprove(activeChat.proposal)}
+                        disabled={approving}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                          padding: "8px 16px",
+                          background: approving ? "#9CA3AF" : "#4F46E5",
+                          color: "#fff",
+                          border: "none",
+                          borderRadius: 8,
+                          fontSize: 13,
+                          fontWeight: 700,
+                          cursor: approving ? "default" : "pointer",
+                        }}
+                      >
+                        {approving ? "반영 중..." : "✅ 승인 (계획에 반영)"}
+                      </button>
+                    ) : (
+                      <div style={{ fontSize: 12.5, color: "#6B7280" }}>
+                        🔒 이 조치는 <b>팀장</b>만 승인할 수 있어요.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <div ref={messagesEndRef} />
             </div>
           )}

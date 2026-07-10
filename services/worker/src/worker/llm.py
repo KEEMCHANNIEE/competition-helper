@@ -12,7 +12,9 @@ from google import genai
 
 from contest_helper_core.config import Settings, get_settings
 
-GENERATE_MODEL = "gemini-2.5-flash"
+# gemini-2.5-flash 는 2026년 중 deprecated(404). gemini-flash-latest 는 과부하(503)가 잦아
+# 가볍고 안정적인 flash-lite alias 사용(분류·짧은 생성엔 충분).
+GENERATE_MODEL = "gemini-flash-lite-latest"
 EMBED_MODEL = "gemini-embedding-001"
 EMBEDDING_DIM = 768
 

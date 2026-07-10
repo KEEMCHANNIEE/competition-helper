@@ -6,7 +6,7 @@ from datetime import datetime
 from secrets import token_urlsafe
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
@@ -90,6 +90,45 @@ def google_callback(
         samesite="lax",
     )
     resp.delete_cookie(_STATE_COOKIE)
+    return resp
+
+
+class SwitchRequest(BaseModel):
+    user_id: int
+
+
+@router.post("/auth/dev/switch")
+def dev_switch_user(
+    payload: SwitchRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """[데모용] 같은 워크스페이스의 다른 멤버로 세션을 전환한다(팀원 전환 스위치).
+
+    실제 인증을 우회하는 데모 전용 백도어다. 프로덕션에선 제거/비활성화할 것.
+    """
+    from app.workspaces import service as ws_service
+
+    target = db.get(User, payload.user_id)
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="사용자를 찾을 수 없습니다."
+        )
+    if not ws_service.shares_workspace(db, current_user.id, target.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="같은 워크스페이스 멤버로만 전환할 수 있습니다.",
+        )
+    resp = JSONResponse(
+        {"ok": True, "user_id": target.id, "name": target.name or target.email}
+    )
+    resp.set_cookie(
+        service.SESSION_COOKIE,
+        service.create_session_token(target.id),
+        max_age=service.SESSION_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+    )
     return resp
 
 
