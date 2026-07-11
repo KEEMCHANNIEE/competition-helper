@@ -239,11 +239,65 @@ export default function Workspace({ onGoToChat, onStartTaskChat, active = true }
     (new Date(`${contest.end_date}T23:59:59`) - new Date()) / (1000 * 60 * 60 * 24)
   );
 
-  const handleToggleTask = (id) =>
-    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, completed: !t.completed } : t)));
+  // 완료 체크: 실제 워크스페이스면 서버에 저장하고(낙관적 업데이트), 실패하면 되돌린다.
+  const handleToggleTask = async (id) => {
+    const target = tasks.find((t) => t.id === id);
+    if (!target) return;
+    const nextCompleted = !target.completed;
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, completed: nextCompleted } : t)));
 
-  const handleAddTask = (newTask) =>
-    setTasks((prev) => [...prev, { id: Date.now(), completed: false, ...newTask }]);
+    if (!isReal || !wsId) return; // mock 워크스페이스는 화면 상태만 바꾸고 끝.
+    try {
+      const res = await fetch(`/workspaces/${wsId}/tasks/${id}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: nextCompleted ? "done" : "todo" }),
+      });
+      if (!res.ok) throw new Error("저장 실패");
+    } catch {
+      // 저장 실패 시 화면 상태를 원래대로.
+      setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, completed: !nextCompleted } : t)));
+    }
+  };
+
+  // 할 일 추가: 실제 워크스페이스면 서버에 만들고, 응답으로 받은 진짜 id로 화면을 갱신한다.
+  // 담당자는 이름으로 입력받아 members 목록에서 user_id를 찾는다(없으면 미배정).
+  // priority/dueDate는 백엔드 Task 모델에 없는 필드라 이번 저장에서는 화면 표시로만 남는다.
+  const handleAddTask = async (newTask) => {
+    if (!isReal || !wsId) {
+      setTasks((prev) => [...prev, { id: Date.now(), completed: false, ...newTask }]);
+      return;
+    }
+    const matchedMember = members.find((m) => m.name === newTask.assignee);
+    try {
+      const res = await fetch(`/workspaces/${wsId}/tasks`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: newTask.title,
+          assignee_id: matchedMember ? matchedMember.user_id : null,
+        }),
+      });
+      if (!res.ok) throw new Error("저장 실패");
+      const saved = await res.json();
+      setTasks((prev) => [
+        ...prev,
+        {
+          id: saved.id,
+          completed: saved.status === "done",
+          title: saved.title,
+          assignee: newTask.assignee || "미배정",
+          priority: newTask.priority,
+          dueDate: newTask.dueDate,
+        },
+      ]);
+    } catch {
+      // 저장 실패해도 사용자가 입력한 내용은 잃지 않도록 로컬에만 추가.
+      setTasks((prev) => [...prev, { id: Date.now(), completed: false, ...newTask }]);
+    }
+  };
 
   const handleAddSchedule = (newSchedule) =>
     setSchedules((prev) =>

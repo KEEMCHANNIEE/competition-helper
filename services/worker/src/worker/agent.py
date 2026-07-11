@@ -39,6 +39,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable
+from datetime import date
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -58,13 +59,25 @@ from contest_helper_core.schemas import (
     RecommendJobPayload,
     TaskIn,
 )
+from worker import competition_agent
 from worker.llm import GeminiClient, LLMClient
+from worker.mcp_tools.competitions import (
+    KNOWN_CATEGORIES,
+    KNOWN_TARGETS,
+    TARGET_NO_RESTRICTION,
+    CompetitionDetailOut,
+    CompetitionSearchFilters,
+    get_competition_detail,
+    search_competitions,
+)
 from worker.mcp_tools.registry import build_registry
+from worker.mcp_tools.web_search import web_search
 from worker.progress_agent import (
     evaluate_progress,
     format_weekly_report,
     weekly_report,
 )
+from worker.rag import semantic_search
 
 # 의도 분류는 LLM(GeminiClient.generate)이 담당한다. 이 키워드 dict 는 LLM 호출이
 # 실패했을 때(자격증명 문제·네트워크 장애 등) 쓰는 규칙 기반 폴백 전용이다.
@@ -73,13 +86,23 @@ _INTENT_KEYWORDS: dict[str, list[str]] = {
     "log": ["저장해", "기록해", "실행 로그", "작업한 거", "오늘 한 거", "로그로 남겨"],
     # workspace 는 plan("계획 만들") 과 혼동되지 않도록 먼저 검사한다.
     "workspace": ["워크스페이스 만들", "워크스페이스 생성", "워크스페이스 열", "작업공간 만들"],
+    # wsedit 은 "만들어줘"(workspace)와 겹치지 않는 "바꿔/수정/변경" 표현만 잡는다.
+    # 이름을 "workspace_edit"이 아니라 "wsedit"으로 짓는 이유: _classify_intent의 매칭이
+    # "intent in raw" 부분 문자열 검사라, "workspace"가 "workspace_edit"의 부분 문자열이면
+    # LLM이 정확히 "workspace_edit"이라고 답해도 앞의 "workspace"로 잘못 매칭돼버린다.
+    "wsedit": [
+        "워크스페이스 이름", "워크스페이스 수정", "이름 바꿔", "이름을 바꿔", "이름으로 바꿔",
+        "공모전 변경", "공모전으로 바꿔", "공모전으로 변경", "공모전 연결", "다시 연결",
+    ],
     # topic 은 "주제 추천" 처럼 recommend("추천") 과 겹칠 수 있어 recommend 보다 먼저 둔다.
     "topic": ["주제 추천", "주제 제안", "주제 후보", "주제 정해", "주제 뽑", "무슨 주제", "어떤 주제"],
     # advice 는 특정 할 일을 "어떻게 시작/진행"할지 방법을 묻는 질문(S-02 STEP01).
     # plan("계획/일정") 과 겹치지 않도록 "어떻게 ~" 표현 위주로 잡고 plan 보다 먼저 검사.
     "advice": ["어떻게 시작", "어떻게 하면 좋을", "어떻게 진행하면", "어떻게 접근", "어디서부터", "어떻게 해야 할"],
     "plan": ["계획", "일정", "역할", "스케줄", "마감까지"],
-    "recommend": ["추천", "찾아줘", "공모전 알려줘", "뭐가 있어"],
+    # "찾아줘"만 넣으면 "수상작 찾아줘"처럼 이미 언급된 공모전에 대한 사실 질문(study)까지
+    # 걸려버려서, 새 공모전 탐색 의미가 뚜렷한 표현으로만 좁힌다.
+    "recommend": ["추천", "공모전 찾아줘", "공모전 알려줘", "뭐가 있어"],
     # teamstatus 는 팀 전체(팀원별) 실행 현황(S-02 STEP03). progress(개인)보다 먼저 검사.
     "teamstatus": ["팀 전체 진행", "팀 전체 현황", "팀 진행 현황", "전체 진행 현황", "팀 현황", "팀원별 현황", "누가 뭐 했", "누가 무엇을"],
     # riskcheck 는 팀장이 현황+다음 주 계획의 리스크 점검을 요청(S-03 STEP02).
@@ -203,6 +226,10 @@ def chat(
         return _handle_create_workspace(
             conversation_id, user_id, last_user_msg, session_factory=session_factory
         )
+    if message["intent"] == "wsedit":
+        return _handle_workspace_edit(
+            conversation_id, last_user_msg, session_factory=session_factory, llm=llm
+        )
     if message["intent"] == "background":
         return _handle_background(
             conversation_id, session_factory=session_factory
@@ -217,7 +244,9 @@ def chat(
             session_factory=session_factory, llm=llm,
         )
     if message["intent"] == "recommend":
-        return _handle_recommend(last_user_msg, tools)
+        return _handle_recommend(
+            history, last_user_msg, conversation_id, session_factory=session_factory
+        )
     if message["intent"] == "teamstatus":
         return _handle_team_status(
             conversation_id, session_factory=session_factory
@@ -237,7 +266,9 @@ def chat(
             conversation_id, last_user_msg, tools,
             session_factory=session_factory, llm=llm,
         )
-    return _handle_study(last_user_msg)
+    return competition_agent._handle_study(
+        last_user_msg, history, conversation_id, tools, llm=llm, session_factory=session_factory
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -267,21 +298,22 @@ def _classify_intent(text: str, *, llm: LLMClient | None = None) -> dict:
         return {"intent": "riskcheck", "matched_on": "keyword"}
 
     prompt = f"""당신은 공모전 준비를 돕는 챗봇의 의도 분류기입니다.
-아래 사용자 메시지를 다음 열두 가지 중 정확히 하나로 분류하고, 그 단어 하나만 답하세요.
+아래 사용자 메시지를 다음 열세 가지 중 정확히 하나로 분류하고, 그 단어 하나만 답하세요.
 다른 설명이나 문장부호 없이 단어 하나만 출력해야 합니다.
 
-- workspace: 워크스페이스(작업 공간)를 새로 만들거나 열어 달라는 요청
+- workspace: 아직 없는 워크스페이스를 "새로" 만들어 달라는 요청일 때만 (예: "워크스페이스 만들어줘", "1번으로 워크스페이스 만들어줘"). "바꿔줘/수정해줘/변경해줘"처럼 이미 있는 걸 고치는 요청이면 절대 이게 아니라 wsedit.
+- wsedit: 이미 있는 워크스페이스의 이름을 바꾸거나 연결된 공모전을 다른 것으로 바꿔 달라는 요청 (예: "워크스페이스 이름 바꿔줘", "1번 공모전으로 다시 연결해줘", "공모전 바꿔줘")
 - log: 작업 내용을 저장/기록/남겨 달라고 "명시적으로" 요청할 때만 (예: "오늘 작업한 거 저장해줘"). 단순히 오늘 한 일을 서술하면 study.
 - background: 자기(팀원)의 경험·관심·강점을 소개하거나 진술 (예: "나는 데이터 분석 경험이 있어")
 - topic: 주제/아이디어 후보를 제안해 달라고 "명시적으로" 요청할 때만
 - advice: 이미 정해진 특정 할 일(작업)을 어떻게 시작·진행하면 좋을지 방법이나 방향을 물어봄 (예: "○○ 데이터 수집해야 하는데 어떻게 시작하면 좋을까?")
 - plan: 준비 계획·일정·역할 분담을 요청
-- recommend: 공모전 추천·검색을 요청
+- recommend: 아직 안 정한 "새 공모전"을 찾아/추천해 달라는 요청 (예: "공모전 추천해줘", "마케팅 관련 공모전 찾아줘")
 - progress: (개인) 지금까지의 진행 상황·진척도를 물어봄
 - teamstatus: 팀 전체(팀원별)가 각각 무엇을 했는지 실행 현황을 물어봄 (예: "팀 전체 진행 현황 알려줘", "누가 뭐 했어?")
 - riskcheck: 현재 현황을 근거로 다음 주 계획의 리스크·문제를 점검/진단해 달라고 요청 (예: "이번 주 현황 어때? 다음 주 계획 괜찮아?")
 - report: 팀 전체의 주간 리포트/집계 현황을 요청 (예: "주간 리포트 보여줘")
-- study: 그 외(개념 설명, 질문, 잡담 등)
+- study: 그 외(개념 설명, 질문, 잡담 등). 이미 언급된 공모전에 대한 사실 질문(작년 수상작, 심사위원, 참가자격, 비교 등 "찾아줘/알려줘"라고 물어도 새 공모전 탐색이 아니면 여기)도 포함
 
 사용자 메시지: "{text}"
 
@@ -517,8 +549,8 @@ def _handle_create_workspace(
     현재 대화에 연결한다. (S-01 STEP03)
 
     - 이미 연결된 워크스페이스가 있으면 새로 만들지 않고 안내만 한다(멱등).
-    - 메시지에 공모전 번호가 있으면("12번으로 ...") 그 공모전에 연결한다(contest_id).
-      번호가 없으면 공모전 미연결로 생성하고 이름만 만든다.
+    - 메시지에 순번("1번으로 ...")이나 공모전 이름이 있으면, 직전 추천/검색 결과에서
+      그 공모전을 찾아 연결한다(contest_id). 특정이 안 되면 공모전 미연결로 생성한다.
     - 팀원 초대·알림·섹션은 백엔드/다음 단계 몫이라, 여기선 소유자 1명 등록 +
       대화 연결까지만 책임진다.
     - 새 테이블/마이그레이션 없이 기존 Workspace/WorkspaceMember/Conversation 만 사용.
@@ -526,8 +558,12 @@ def _handle_create_workspace(
     if session_factory is None:
         session_factory = _default_session_factory()
 
-    # 메시지에 공모전 번호가 있으면 그 공모전에 맞춰 만든다(추천 목록에서 고른 경우).
-    contest_id, contest_title = _extract_contest(last_user_msg)
+    # 메시지에 순번/이름이 있으면 직전 추천 목록에서 그 공모전을 찾는다.
+    contest_id, contest_title, ambiguous = _extract_contest(
+        last_user_msg, conversation_id, session_factory=session_factory
+    )
+    if ambiguous:
+        return "어떤 공모전인지 정확히 특정하지 못했어요. 순번이나 공모전 이름으로 다시 말씀해 주시겠어요?"
 
     with session_factory() as session:
         conv = session.get(Conversation, conversation_id)
@@ -576,6 +612,86 @@ def _handle_create_workspace(
     )
 
 
+def _handle_workspace_edit(
+    conversation_id: int,
+    last_user_msg: str,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+    llm: LLMClient | None = None,
+) -> str:
+    """이미 연결된 워크스페이스의 이름 또는 연결된 공모전을 바꾼다.
+
+    이름 변경은 LLM으로 새 이름만 뽑고, 공모전 변경은 ``_extract_contest`` 를
+    그대로 재사용한다(추천 목록에서 순번/이름으로 워크스페이스를 만들 때와
+    동일한 메커니즘 — id는 사용자에게 노출하지 않는다). 둘 다 못 찾으면
+    무엇을 바꾸고 싶은지 되묻고, 아무것도 바꾸지 않는다.
+    """
+    if session_factory is None:
+        session_factory = _default_session_factory()
+
+    workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
+    if workspace_id is None:
+        return "이 대화는 아직 워크스페이스에 연결돼 있지 않아요. 먼저 워크스페이스를 만들어 주세요."
+
+    new_name = _extract_new_workspace_name(last_user_msg, llm=llm)
+    contest_id, contest_title, ambiguous = _extract_contest(
+        last_user_msg, conversation_id, session_factory=session_factory
+    )
+    if ambiguous:
+        return "어떤 공모전으로 바꿀지 정확히 특정하지 못했어요. 순번이나 공모전 이름으로 다시 말씀해 주시겠어요?"
+    if new_name is None and contest_id is None:
+        return "무엇을 바꾸고 싶으신가요? 새 이름이나 연결할 공모전(순번/이름)을 말씀해 주세요."
+
+    changes: list[str] = []
+    with session_factory() as session:
+        ws = session.get(Workspace, workspace_id)
+        if ws is None:
+            return "워크스페이스를 찾을 수 없어요."
+
+        if new_name:
+            changes.append(f"이름: '{ws.name}' → '{new_name}'")
+            ws.name = new_name
+        if contest_id is not None:
+            changes.append(f"연결된 공모전: '{contest_title}'")
+            ws.contest_id = contest_id
+
+        member_ids = (
+            session.execute(
+                select(WorkspaceMember.user_id).where(WorkspaceMember.workspace_id == workspace_id)
+            )
+            .scalars()
+            .all()
+        )
+        notify_text = "워크스페이스 설정이 변경됐어요 — " + ", ".join(changes)
+        _notify_members(session, workspace_id, list(member_ids), notify_text)
+
+        session.commit()
+
+    return "워크스페이스를 수정했어요 — " + ", ".join(changes) + ". 팀원들에게 알림도 보냈어요."
+
+
+def _extract_new_workspace_name(text: str, *, llm: LLMClient | None = None) -> str | None:
+    """메시지에서 워크스페이스에 붙이고 싶어하는 새 이름을 뽑는다. 없으면 None."""
+    try:
+        result = (llm or GeminiClient()).generate(
+            f"다음 메시지가 워크스페이스 '이름'을 바꿔 달라는 요청인지 판단하세요.\n"
+            f'"공모전으로 바꿔줘/연결해줘/변경해줘"처럼 어떤 공모전에 연결할지에 대한 '
+            f'요청은 이름 변경이 아닙니다 — 그런 경우 반드시 \'없음\'을 반환하세요.\n'
+            f"이름 변경 요청이 확실할 때만 그 새 이름을 반환하세요(따옴표·설명 없이).\n\n"
+            f'예시 1) "이름을 KOSAC 준비팀으로 바꿔줘" → KOSAC 준비팀\n'
+            f'예시 2) "1번 공모전으로 다시 연결해줘" → 없음 (이건 공모전 변경이지 이름 변경이 아님)\n'
+            f'예시 3) "공모전 바꿔줘" → 없음\n\n'
+            f'메시지: "{text}"\n'
+            f"이름:"
+        )
+    except Exception:
+        return None
+    name = result.strip().strip("'\"")
+    if not name or name == "없음":
+        return None
+    return name[:200]
+
+
 def _notify_members(
     session: Session,
     workspace_id: int,
@@ -613,24 +729,56 @@ def _notify_members(
         )
 
 
-def _extract_contest(text: str) -> tuple[int | None, str | None]:
-    """메시지에서 공모전 번호를 찾아 (contest_id, 공모전 제목)을 반환한다.
+_ORDINAL_WORDS = {"첫번째": 1, "첫": 1, "두번째": 2, "세번째": 3, "네번째": 4, "다섯번째": 5}
 
-    추천 목록이 "[12] KOSSDA... " 형태로 번호를 보여주므로, 사용자가 "12번으로
-    워크스페이스 만들어줘"라고 하면 그 번호를 공모전 PK 로 본다. 번호가 없거나
-    실제 공모전이 아니면 (None, None) — 공모전 미연결로 워크스페이스를 만든다.
+
+def _extract_contest(
+    text: str,
+    conversation_id: int,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+) -> tuple[int | None, str | None, bool]:
+    """직전 추천/검색 결과에서 순번 또는 이름으로 공모전을 찾아 (contest_id, 제목, 모호함여부)를 반환한다.
+
+    사용자에게는 DB 고유번호(PK)를 노출하지 않으므로("1. OO공모전"처럼 순번만 보여줌),
+    "12번으로"처럼 메시지 속 숫자를 그대로 PK로 쓰던 예전 방식은 더 이상 쓸 수 없다.
+    대신 ``competition_agent.save_recommend_list`` 가 남긴 순번↔id↔제목 기록을 읽어서,
+    (i) "1번"/"첫번째" 같은 순번 표현, (ii) 공모전 이름과의 단어 겹침으로 실제 id를 찾는다.
+
+    - 참조 시도 자체가 없으면(추천 기록이 없거나 순번/이름 어느 쪽도 못 찾음) →
+      (None, None, False) — 무리하게 추측하지 않고 공모전 미연결로 진행.
+    - 순번을 댔는데 범위를 벗어나면(예: 목록엔 3개인데 "5번") → (None, None, True) —
+      잘못 짚은 게 분명하므로 워크스페이스를 만들지 않고 다시 물어봐야 한다.
     """
-    m = re.search(r"\d+", text)
-    if not m:
-        return None, None
-    cid = int(m.group())
-    try:
-        detail = build_registry()["get_competition_detail"](cid)
-    except Exception:  # noqa: BLE001 - 조회 실패(미구현 포함) 시 미연결로 진행
-        return None, None
-    if detail is None:
-        return None, None
-    return cid, detail.title
+    entries = competition_agent.load_latest_recommend_list(
+        conversation_id, session_factory=session_factory
+    )
+    if not entries:
+        return None, None, False
+
+    ordinal_match = re.search(r"([1-9])\s*번", text)
+    if ordinal_match:
+        n = int(ordinal_match.group(1))
+        if 1 <= n <= len(entries):
+            entry = entries[n - 1]
+            return entry["id"], entry["title"], False
+        return None, None, True
+
+    for word, n in _ORDINAL_WORDS.items():
+        if word in text and n <= len(entries):
+            entry = entries[n - 1]
+            return entry["id"], entry["title"], False
+
+    words = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", text))
+    best, best_score = None, 0
+    for entry in entries:
+        overlap = len(words & set(re.findall(r"[가-힣A-Za-z0-9]{2,}", entry["title"])))
+        if overlap > best_score:
+            best, best_score = entry, overlap
+    if best is not None:
+        return best["id"], best["title"], False
+
+    return None, None, False
 
 
 def _workspace_name_from(text: str) -> str:
@@ -833,51 +981,271 @@ def _handle_background(
     )
 
 
-# [임시/데모용 — competition-agent(유진) 확인 필요]
-# search_competitions 의 keyword 는 title ILIKE '%kw%' 라 문장 전체를 넘기면 0건이다.
-# 데모가 막히지 않게, 메시지에서 뽑은 후보 토큰으로 순차 검색하고 실패 시 열린 공모전으로
-# 폴백한다. 정식 버전은 semantic_search / 사용자 프로필 기반으로 유진이 교체할 예정.
-_RECOMMEND_STOPWORDS = (
-    "추천", "공모전", "찾아줘", "찾아", "알려줘", "알려", "해줘", "해봐", "해보고", "해보",
-    "관련", "관심", "있어", "있나", "없어", "없나", "뭐가", "뭐", "좀", "나가고", "나갈",
-    "싶어", "싶은", "대회", "괜찮은", "적당한", "이번", "우리", "요즘",
-)
+def _extract_search_keyword(history: list[MessageOut]) -> str | None:
+    """대화 전체 사용자 메시지에서 공모전 검색 키워드를 추출한다.
 
+    사용자가 여러 턴에 걸쳐 밝힌 분야·목표·조건을 합쳐 짧은 키워드로 만든다.
+    파악된 정보가 없으면 None 을 반환해 전체 검색으로 fallback 한다.
+    """
+    user_msgs = [m.content for m in history if m.role == "user"]
+    if not user_msgs:
+        return None
 
-def _recommend_keywords(text: str) -> list[str]:
-    """사용자 메시지에서 검색에 쓸 후보 키워드 토큰들을 뽑는다(간단 규칙, 데모용)."""
-    words = text.replace(",", " ").replace(".", " ").split()
-    kept: list[str] = []
-    for w in words:
-        for s in _RECOMMEND_STOPWORDS:
-            w = w.replace(s, "")
-        w = w.strip(" '\"~!?()")
-        if len(w) >= 2 and w not in kept:
-            kept.append(w)
-    return kept[:4]
-
-
-def _handle_recommend(last_user_msg: str, tools: dict) -> str:
-    try:
-        results: list = []
-        for kw in _recommend_keywords(last_user_msg):
-            results = tools["search_competitions"](keyword=kw, limit=3)
-            if results:
-                break
-        if not results:
-            # 폴백: 특정 키워드가 안 맞으면 마감 임박한 열린 공모전을 보여준다.
-            results = tools["search_competitions"](keyword=None, limit=3)
-    except NotImplementedError:
-        # search_agent 파트가 아직 구현 전이어도 workspace_agent 쪽 흐름은 막지 않는다.
-        return "추천 기능을 준비 중이에요. 조금만 기다려 주세요!"
-    if not results:
-        return "지금은 열린 공모전을 찾지 못했어요. 잠시 후 다시 시도해 주세요."
-    lines = [f"[{c.id}] {c.title} (마감 {c.deadline})" for c in results]
-    return (
-        "이런 공모전은 어때요?\n"
-        + "\n".join(lines)
-        + "\n\n마음에 드는 번호로 '○번으로 워크스페이스 만들어줘' 라고 말해보세요."
+    recent = user_msgs[-5:]  # 최근 5개 사용자 메시지
+    latest = recent[-1]
+    earlier = " / ".join(recent[:-1]) if len(recent) > 1 else "(없음)"
+    llm = GeminiClient()
+    result = llm.generate(
+        f"다음은 사용자와 공모전 도우미의 대화에서 사용자 발언만 모은 것입니다.\n"
+        f"공모전 DB 검색에 쓸 핵심 키워드를 한국어로 1~3단어만 반환하세요.\n"
+        f"분야·카테고리 위주로 추출하고, 설명 없이 키워드만 반환하세요.\n"
+        f"이전 발언에서 파악된 분야/키워드가 있으면 기본으로 사용하세요.\n"
+        f"최신 발언은 이전 조건과 명백히 충돌하거나(\"다른 분야도\", \"말고 다른 거\" 등) "
+        f"새 분야를 언급할 때만 우선 적용하세요. 최신 발언이 단순 진행 요청·의견"
+        f"(예: \"공모전부터 정해야되는거 아냐?\", \"빨리 추천해줘\")이라 분야 정보가 "
+        f"없다면 이전 발언의 키워드를 그대로 유지하세요.\n"
+        f"정말 아무 정보도 없으면 '없음'이라고만 반환하세요.\n\n"
+        f"이전 발언: {earlier}\n"
+        f"최신 발언: {latest}\n"
+        f"키워드:"
     )
+    keyword = result.strip()
+    if not keyword or keyword == "없음":
+        return None
+    return keyword[:50]
+
+
+def _extract_search_filters(
+    history: list[MessageOut], *, llm: LLMClient | None = None
+) -> CompetitionSearchFilters:
+    """대화 전체에서 구조화된 검색 필터(분야/대상/최소상금/참여형태/취업연계/마감)를 추출한다.
+
+    사용자가 실제로 언급한 조건만 채우고 나머지는 반드시 null로 두도록 프롬프트에
+    명시한다(없는 조건을 LLM이 지어내 결과를 과도하게 걸러내는 것 방지). LLM 호출
+    실패·JSON 파싱 실패 시 빈 필터(전부 None, 즉 무필터)로 안전하게 폴백한다.
+    """
+    user_msgs = [m.content for m in history if m.role == "user"]
+    if not user_msgs:
+        return CompetitionSearchFilters()
+
+    recent = user_msgs[-5:]  # 최근 5개 사용자 메시지
+    latest = recent[-1]
+    earlier = " / ".join(recent[:-1]) if len(recent) > 1 else "(없음)"
+    today = date.today().isoformat()
+    category_options = ", ".join(KNOWN_CATEGORIES)
+    target_options = ", ".join(KNOWN_TARGETS)
+    prompt = f"""다음은 사용자와 공모전 도우미의 대화에서 사용자 발언만 모은 것입니다.
+아래 JSON 스키마에 맞춰, 사용자가 명시적으로 언급한 조건만 채우고 언급 안 된 필드는
+반드시 null 로 두세요. 설명이나 코드블록 없이 JSON 객체 하나만 출력하세요.
+
+오늘 날짜: {today} (마감일 관련 표현("이번 주까지", "이번 달 안에" 등)은 이 날짜 기준으로 계산하세요)
+
+중요: 이전 발언에서 파악된 조건은 기본으로 유지하세요. 최신 발언이 이전 조건과
+명백히 충돌하거나("다른 분야도 보여줘", "말고 다른 거", "그거 말고" 등) 새 조건을
+언급할 때만 그 필드를 null로 되돌리거나 새 값으로 교체하세요. 최신 발언이 단순
+진행 요청·의견(예: "공모전부터 정해야되는거 아냐?", "빨리 추천해줘")이라 특정
+조건에 대한 언급이 없다면, 그 필드는 이전 발언에서 파악된 값을 그대로 유지하세요.
+
+스키마:
+{{
+  "category": ["분야1", "분야2"] 또는 null,     // 반드시 다음 중에서만 골라라: {category_options}
+  "target": ["대학생", "일반인"] 또는 null,      // 반드시 다음 중에서만 골라라: {target_options}
+  "has_prize": true, false, 또는 null,          // 금액과 상관없이 "상금이 있는지"만 물었으면 true
+  "min_prize": 정수 또는 null,                  // 사용자가 구체적인 최소 금액을 언급했을 때만
+  "participation_type": "individual" 또는 "team" 또는 null,
+  "is_career_benefit": true, false, 또는 null,  // 취업·인턴 연계를 원한다고 했으면
+  "deadline_before": "YYYY-MM-DD" 또는 null      // 이 날짜 전 마감만 원하면(상대 표현은 오늘 날짜 기준 환산)
+}}
+
+이전 발언(참고용 — 최신 발언과 충돌하면 무시): {earlier}
+최신 발언(가장 중요): {latest}
+
+JSON:"""
+
+    try:
+        client = llm or GeminiClient()
+        raw = client.generate(prompt).strip()
+        raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        data = json.loads(raw)
+        filters = CompetitionSearchFilters.model_validate(data)
+    except Exception:
+        return CompetitionSearchFilters()
+
+    return filters
+
+
+def _apply_filters(
+    results: list[CompetitionDetailOut],
+    filters: CompetitionSearchFilters,
+) -> list[CompetitionDetailOut]:
+    """구조화 필터를 semantic_search 결과에 Python 레벨로 적용한다.
+
+    embeddings 는 App DB, contests 는 별도 읽기전용 DB라 SQL JOIN이 안 되므로
+    (search_competitions 와 달리) 여기서는 이미 조회된 객체를 기준으로 걸러낸다.
+    """
+
+    def keep(c: CompetitionDetailOut) -> bool:
+        if filters.participation_type == "individual" and c.participation_type not in (
+            "individual", "individual_or_team", None, "",
+        ):
+            return False
+        if filters.participation_type == "team" and c.participation_type not in (
+            "team", "individual_or_team", None, "",
+        ):
+            return False
+        if filters.category and not (set(filters.category) & set(c.category)):
+            return False
+        if (
+            filters.target
+            and TARGET_NO_RESTRICTION not in c.target
+            and not (set(filters.target) & set(c.target))
+        ):
+            # "대상 제한 없음"이면 누구나 지원 가능하다는 뜻이라 target 필터를 걸지 않는다.
+            return False
+        if filters.has_prize is True:
+            prize = c.total_prize_amount or c.first_prize_amount or 0
+            if prize <= 0:
+                return False
+        if filters.has_prize is False:
+            prize = c.total_prize_amount or c.first_prize_amount or 0
+            if prize > 0:
+                return False
+        if filters.min_prize is not None:
+            prize = c.total_prize_amount or c.first_prize_amount or 0
+            if prize < filters.min_prize:
+                return False
+        if filters.is_career_benefit is not None and c.is_career_benefit != filters.is_career_benefit:
+            return False
+        if filters.deadline_before is not None and c.deadline and c.deadline >= filters.deadline_before:
+            return False
+        return True
+
+    return [c for c in results if keep(c)]
+
+
+def _handle_recommend(
+    history: list[MessageOut],
+    last_user_msg: str,
+    conversation_id: int,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+) -> str:
+    """관심분야·참여형태·목표를 단계적으로 파악해 공모전을 추천한다. (S-01 STEP01)
+
+    시맨틱 검색 → 구조화 필터 적용 → 부족하면 전체 검색 → 그래도 없으면 웹 검색 순으로
+    폴백한다. DB에서 찾은 결과는 사용자에게 순번(1. 2. 3. ...)으로만 보여주고, 실제
+    DB 고유번호는 노출하지 않는다 — 대신 ``Message(role="recommend")`` 로 순번↔id↔제목
+    매핑을 저장해, 이후 "1번으로 워크스페이스 만들어줘" 같은 요청을 해석할 수 있게 한다.
+    """
+    search_keyword = _extract_search_keyword(history)
+    filters = _extract_search_filters(history)
+    db_results: list | None = None  # role="recommend" 저장은 LLM 응답 생성 후 마지막에(경쟁조건 방지)
+
+    if not search_keyword:
+        # 관심 분야가 아직 파악 안 됐으면 검색 자체를 생략하고, LLM이 요구사항부터
+        # 질문하게 한다(정보 없이 아무 공모전 목록이나 던지는 것 방지).
+        tool_context = (
+            "\n\n[검색 미실행: 아직 관심 분야·참여 형태가 파악되지 않았습니다. "
+            "아래 규칙 1단계에 따라 검색 결과 없이 먼저 질문하세요. 절대로 번호가 매겨진 "
+            "공모전 목록(1. 2. 3. ...)을 지어내서 보여주지 마세요 — 이 블록에 실제 "
+            "[검색 결과]가 없다는 것은 검색 자체가 실행되지 않았다는 뜻입니다.]"
+        )
+    else:
+        results = semantic_search(search_keyword, k=10)
+        results = _apply_filters(results, filters)[:5]
+
+        if not results:
+            results = search_competitions(keyword=None, open_only=True, filters=filters, limit=5)
+
+        if results:
+            db_results = results
+            tool_context = (
+                "\n\n[검색 결과 - 아래 목록만 사용하고 없는 공모전은 절대 만들지 마세요. "
+                "각 항목 앞의 번호를 그대로 답변에도 순서대로 남기세요(1. 2. 3. ...). "
+                "내부 고유번호(id)는 어떤 형태로도 사용자에게 보여주면 안 됩니다.]\n"
+            )
+            for i, c in enumerate(results, start=1):
+                detail = get_competition_detail(c.id)
+                if detail:
+                    deadline = f"마감: {detail.deadline}" if detail.deadline else ""
+                    categories = ", ".join(detail.category[:3])
+                    requirements = ", ".join(detail.requirements[:3]) if detail.requirements else "없음"
+                    prize = f"{detail.first_prize_amount:,}원" if detail.first_prize_amount else "미정"
+                    team = detail.team_config or "제한 없음"
+                    tool_context += (
+                        f"{i}. {detail.title}\n"
+                        f"  {deadline} | 카테고리: {categories}\n"
+                        f"  지원자격: {requirements}\n"
+                        f"  1등 상금: {prize} | 팀구성: {team}\n"
+                    )
+                else:
+                    deadline = f"마감: {c.deadline}" if c.deadline else ""
+                    tool_context += f"{i}. {c.title} ({deadline})\n"
+        else:
+            # DB에 아무것도 없으면 웹 검색. 워크스페이스 연결 대상이 아니므로 순번은 매기지 않는다.
+            web_results = web_search(f"{last_user_msg[:50]} 공모전 모집", max_results=5)
+            if web_results:
+                tool_context = "\n\n[웹 검색 결과 - 출처 URL을 함께 안내하고, 번호는 매기지 마세요]\n"
+                for r in web_results:
+                    tool_context += f"- {r.title}\n  {r.snippet}\n  출처: {r.url}\n"
+            else:
+                tool_context = (
+                    "\n\n[검색 결과 없음: DB와 웹 검색 모두 관련 공모전을 찾지 못했습니다. "
+                    "솔직히 못 찾았다고 안내하세요. 절대로 번호가 매겨진 공모전 목록을 "
+                    "지어내서 보여주면 안 됩니다 — 존재하지 않는 공모전을 만들어내는 것은 "
+                    "심각한 오류입니다.]"
+                )
+
+    history_text = "\n".join(
+        f"{'사용자' if m.role == 'user' else '어시스턴트'}: {m.content}"
+        for m in history
+        if m.role in ("user", "assistant")
+    )
+
+    prompt = f"""당신은 공모전 도우미 AI입니다. 공모전 추천, 정보 안내, 준비 계획 수립을 도와드립니다.
+
+[공모전 추천 흐름 규칙]
+사용자가 공모전을 찾거나 추천을 요청할 때, 아래 순서를 따르세요.
+
+1. 요구사항 파악 단계 (검색 결과를 사용하지 않음):
+   대화 기록에서 아래 정보가 충분히 파악되지 않았으면 먼저 질문하세요.
+   - 관심 분야 (예: 개발, 디자인, 마케팅, 데이터 등)
+   - 참여 형태 (개인 / 팀, 팀이면 몇 명)
+   - 목표 (포트폴리오, 상금, 경험 등)
+   한 번에 모든 걸 물어보지 말고 자연스럽게 1~2가지씩 파악하세요.
+
+2. 검색 결과 활용 단계:
+   요구사항이 충분히 파악된 경우에만 아래 [검색 결과]를 활용해 추천하세요.
+   검색 결과에 없는 공모전은 절대 만들어내지 마세요.
+
+[답변 형식 규칙]
+- 실제 정보를 전달할 때(공모전 목록, 계획, 팁 등 여러 항목)만 아래 구조를 사용하세요.
+- 여러 항목은 각각 <details><summary>제목</summary>내용</details> 형식으로 접을 수 있게 만드세요.
+- 전체 요약은 <details> 밖에 2~3문장으로 먼저 쓰세요.
+- 마크다운(**, ##, -)도 함께 사용 가능합니다.
+- [검색 결과]에 번호가 매겨진 공모전은 그 번호를 "1. 공모전명"처럼 그대로 답변에 남기세요.
+  내부 고유번호(id)는 어떤 형태로도 사용자에게 보여주면 안 됩니다.
+- 아래 [대화 기록] 뒤에 실제 [검색 결과]/[웹 검색 결과] 블록이 없다면, 번호가 매겨진
+  공모전 목록을 절대로 스스로 만들어내지 마세요. 검색이 아직 안 됐거나 결과가 없다는
+  사실을 그대로 말하고, 필요한 정보(분야/참여형태/목표 등)를 물어보세요.
+
+[대화 기록]
+{history_text}{tool_context}
+
+위 대화에서 어시스턴트의 다음 답변을 작성해 주세요."""
+
+    llm = GeminiClient()
+    reply = llm.generate(prompt)
+
+    # role="recommend" 저장은 응답 생성 "이후"(main.py 가 assistant 메시지를 쓰기 직전)에
+    # 해야 폴링 쪽 "마지막 메시지가 user 면 pending" 판정이 이 중간 기록을 답변으로
+    # 오인하는 창을 최소화한다(topic/log/report 와 동일한 타이밍).
+    if db_results:
+        competition_agent.save_recommend_list(
+            conversation_id, db_results, session_factory=session_factory
+        )
+
+    return reply
 
 
 def _handle_progress(
@@ -1126,13 +1494,6 @@ def _save_reschedule_proposal(
             )
         )
         session.commit()
-
-
-def _handle_study(last_user_msg: str) -> str:
-    # 1단계(규칙 기반) 플레이스홀더. 다음 단계에서 llm.generate 로 교체.
-    if not last_user_msg:
-        return "무엇을 도와드릴까요? '추천해줘' / '계획 짜줘' 처럼 말씀해 주세요."
-    return f"'{last_user_msg}'에 대해 알아보고 있어요. 조금 더 구체적으로 물어봐 주시겠어요?"
 
 
 def _load_contest_brief(

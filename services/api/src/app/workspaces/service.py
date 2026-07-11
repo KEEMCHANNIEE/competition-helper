@@ -506,3 +506,32 @@ def add_task(
     db.commit()
     db.refresh(task)
     return task
+
+
+_TASK_STATUSES = ("todo", "done")
+
+
+def update_task_status(
+    db: Session, *, ws: Workspace, actor: User, task_id: int, new_status: str
+) -> Task:
+    """할 일 1건의 완료 상태를 바꾼다(멤버만). new_status 는 "todo"/"done"만 허용."""
+    require_member(db, ws.id, actor.id)
+    if new_status not in _TASK_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"status 는 {_TASK_STATUSES} 중 하나여야 합니다.",
+        )
+
+    task = db.scalar(
+        select(Task).where(Task.id == task_id, Task.workspace_id == ws.id)
+    )
+    if task is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="할 일을 찾을 수 없습니다.",
+        )
+
+    task.status = new_status
+    db.commit()
+    db.refresh(task)
+    return task

@@ -31,6 +31,10 @@ class RecommendationAttach(BaseModel):
     recommendation_ids: list[int]
 
 
+class TaskStatusUpdate(BaseModel):
+    status: str  # "todo" | "done"
+
+
 class WorkspaceOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -318,4 +322,20 @@ def add_task(
     """할 일 1건 수동 추가(멤버만)."""
     ws = service.get_workspace_or_404(db, workspace_id)
     task = service.add_task(db, ws=ws, actor=current_user, payload=payload)
+    return TaskOut.model_validate(task, from_attributes=True)
+
+
+@router.patch("/{workspace_id}/tasks/{task_id}", response_model=TaskOut)
+def update_task_status(
+    workspace_id: int,
+    task_id: int,
+    payload: TaskStatusUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TaskOut:
+    """할 일 1건의 완료 상태 변경(멤버만). 체크박스 토글용."""
+    ws = service.get_workspace_or_404(db, workspace_id)
+    task = service.update_task_status(
+        db, ws=ws, actor=current_user, task_id=task_id, new_status=payload.status
+    )
     return TaskOut.model_validate(task, from_attributes=True)
