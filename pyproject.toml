@@ -12,7 +12,8 @@ members = ["libs/*", "services/api", "services/worker"]
 contest-helper-core = { workspace = true }
 
 [tool.ruff]
-line-length = 100
+# 한국어 프롬프트/안내 문구가 많아 100자는 너무 빡빡함 — 120으로 완화.
+line-length = 120
 target-version = "py312"
 
 [tool.ruff.lint]
@@ -22,3 +23,8 @@ select = ["E", "F", "I", "UP", "B"]
 # B008(함수 호출을 기본값으로 사용 금지)의 오탐 대상에서 제외한다.
 [tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Body", "fastapi.Header", "fastapi.Cookie"]
+
+# agent.py 의 LLM 프롬프트는 삼중따옴표 문자열 안이라 줄마다 noqa 를 못 붙인다
+# (noqa 주석이 프롬프트 내용으로 그대로 들어가버림) — 파일 단위로 E501 제외.
+[tool.ruff.lint.per-file-ignores]
+"services/worker/src/worker/agent.py" = ["E501"]

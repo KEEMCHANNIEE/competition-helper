@@ -20,9 +20,6 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from redis.exceptions import ConnectionError as RedisConnectionError
-from redis.exceptions import TimeoutError as RedisTimeoutError
-
 from contest_helper_core.config import get_settings
 from contest_helper_core.db import get_engine
 from contest_helper_core.models import AgentJob, Message, Recommendation
@@ -32,6 +29,8 @@ from contest_helper_core.schemas import (
     RecommendationOut,
     RecommendJobPayload,
 )
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 

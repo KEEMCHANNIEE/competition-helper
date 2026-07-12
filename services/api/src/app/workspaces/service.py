@@ -156,7 +156,7 @@ def generate_weekly_report(db: Session, *, ws: Workspace) -> Message:
         "total": total,
     }
     member_data: list[dict] = []
-    for m, u in list_members(db, ws.id):
+    for _m, u in list_members(db, ws.id):
         mine = [t for t in tasks if t.assignee_id == u.id]
         md = sum(1 for t in mine if t.status == "done")
         member_data.append(

@@ -16,12 +16,12 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
-
 from contest_helper_core.db import get_engine
 from contest_helper_core.models import Conversation, Message, Recommendation
 from contest_helper_core.schemas import MessageOut
+from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
+
 from worker.llm import GeminiClient, LLMClient
 from worker.team_fit import evaluate_team_fit
 
@@ -146,7 +146,8 @@ def _make_search_tool(
             return "조건에 맞는 공모전을 찾지 못했어요."
         entries = save_recommend_list(conversation_id, results, session_factory=session_factory)
         lines = [
-            f"{e['ordinal']}. {c.title} (마감 {c.deadline})" for e, c in zip(entries, results)
+            f"{e['ordinal']}. {c.title} (마감 {c.deadline})"
+            for e, c in zip(entries, results, strict=True)
         ]
         return "\n".join(lines)
 
