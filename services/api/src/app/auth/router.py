@@ -5,17 +5,15 @@ from __future__ import annotations
 from datetime import datetime
 from secrets import token_urlsafe
 
+from contest_helper_core.config import get_settings
+from contest_helper_core.models import User
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from contest_helper_core.models import User
-
 from app.auth import oauth, service
 from app.deps import get_current_user, get_db
-
-from contest_helper_core.config import get_settings
 
 router = APIRouter(tags=["auth"])
 

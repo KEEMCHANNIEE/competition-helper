@@ -9,10 +9,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from sqlalchemy.orm import Session
-
 from contest_helper_core.models import AgentJob
 from contest_helper_core.schemas import ChatJobPayload
+from sqlalchemy.orm import Session
 
 if TYPE_CHECKING:
     from redis import Redis
@@ -23,7 +22,7 @@ CHAT_QUEUE_KEY = "contest-helper:jobs:chat"
 
 def enqueue_chat(
     db: Session,
-    redis: "Redis",
+    redis: Redis,
     *,
     user_id: int,
     conversation_id: int,

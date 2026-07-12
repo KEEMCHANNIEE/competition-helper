@@ -8,9 +8,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from google import genai
-
 from contest_helper_core.config import Settings, get_settings
+from google import genai
 
 GENERATE_MODEL = "gemini-2.5-flash"
 EMBED_MODEL = "gemini-embedding-001"

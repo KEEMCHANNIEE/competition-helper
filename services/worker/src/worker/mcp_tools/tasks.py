@@ -17,11 +17,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from sqlalchemy.orm import Session, sessionmaker
-
 from contest_helper_core.db import get_engine
 from contest_helper_core.models import Task
 from contest_helper_core.schemas import TaskIn, TaskOut
+from sqlalchemy.orm import Session, sessionmaker
 
 
 def _default_session_factory() -> sessionmaker[Session]:

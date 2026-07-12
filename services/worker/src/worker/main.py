@@ -19,9 +19,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
-
 from contest_helper_core.config import get_settings
 from contest_helper_core.db import get_engine
 from contest_helper_core.models import AgentJob, Message, Recommendation
@@ -31,6 +28,8 @@ from contest_helper_core.schemas import (
     RecommendationOut,
     RecommendJobPayload,
 )
+from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
 
 if TYPE_CHECKING:  # pragma: no cover - 타입 체크 전용
     from redis import Redis

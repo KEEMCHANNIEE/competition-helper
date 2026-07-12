@@ -8,12 +8,12 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
-from sqlalchemy.orm import sessionmaker
-
 from contest_helper_core.db import get_engine
 from contest_helper_core.models import Embedding
 from contest_helper_core.schemas import CompetitionOut
+from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
+
 from worker.llm import GeminiClient
 from worker.mcp_tools.competitions import get_competition_detail
 

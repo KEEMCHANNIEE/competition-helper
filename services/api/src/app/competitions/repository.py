@@ -8,10 +8,9 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from sqlalchemy import text
-
 from contest_helper_core.competition_db import competition_session_factory
 from contest_helper_core.schemas import CompetitionOut
+from sqlalchemy import text
 
 
 class CompetitionRepository(Protocol):

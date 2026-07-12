@@ -13,11 +13,13 @@ embeddings 테이블은 pgvector Vector 라 SQLite 가 만들 수 없으므로
 from __future__ import annotations
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
-
+from app.deps import (
+    get_competition_repo,
+    get_current_user,
+    get_db,
+    get_redis,
+)
+from app.main import app as fastapi_app
 from contest_helper_core.models import (
     AgentJob,
     Base,
@@ -30,14 +32,10 @@ from contest_helper_core.models import (
     WorkspaceMember,
 )
 from contest_helper_core.schemas import CompetitionOut
-
-from app.deps import (
-    get_competition_repo,
-    get_current_user,
-    get_db,
-    get_redis,
-)
-from app.main import app as fastapi_app
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 # SQLite 가 만들 수 있는 테이블만(pgvector Vector 쓰는 embeddings 만 제외).
 TEST_TABLES = [

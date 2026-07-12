@@ -17,3 +17,8 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+# FastAPI 의 Depends(...)/Query(...) 등은 인자 기본값에서 호출하는 게 정석 패턴이라
+# B008(함수 호출을 기본값으로 사용 금지)의 오탐 대상에서 제외한다.
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Body", "fastapi.Header", "fastapi.Cookie"]

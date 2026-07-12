@@ -5,8 +5,6 @@ TODO(AI 담당): worker/mcp_tools/* 를 구현해 이 테스트를 통과시킬 
 
 from __future__ import annotations
 
-import pytest
-
 from contest_helper_core.schemas import CompetitionOut
 from worker.mcp_tools import competitions, registry, semantic
 

@@ -24,8 +24,14 @@ jobs:
     strategy:
       fail-fast: false # 한 서비스가 실패해도 다른 서비스 검사는 계속
       matrix:
-        # uv workspace 의 패키지 이름. 둘을 각각 검사한다.
-        service: [contest-helper-api, contest-helper-worker]
+        # uv workspace 의 패키지 이름 + 테스트 경로. 둘을 각각 검사한다.
+        # path 를 pytest 에 명시하지 않으면 rootdir 판별이 흔들려 api/worker 양쪽
+        # tests/conftest.py 이름 충돌(ImportPathMismatchError)이 난다.
+        include:
+          - service: contest-helper-api
+            path: services/api
+          - service: contest-helper-worker
+            path: services/worker
     steps:
       - uses: actions/checkout@v4
 
@@ -49,7 +55,7 @@ jobs:
 
       # 해당 서비스의 테스트만 실행.
       - name: Test (pytest)
-        run: uv run --package ${{ matrix.service }} pytest
+        run: uv run --package ${{ matrix.service }} pytest ${{ matrix.path }}/tests
 
   # ---------------------------------------------------------------------------
   # 프론트엔드(web) 검사

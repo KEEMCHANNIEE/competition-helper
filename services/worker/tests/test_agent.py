@@ -6,8 +6,6 @@ TODO(AI 담당): worker/agent.py 를 구현해 이 테스트를 통과시킬 것
 
 from __future__ import annotations
 
-import pytest
-
 from contest_helper_core.schemas import RecommendationOut, RecommendJobPayload
 from worker import agent
 

@@ -8,10 +8,9 @@ Create Date: 2026-06-28 00:00:00.000000
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from pgvector.sqlalchemy import Vector
 from alembic import op
-
 from contest_helper_core.models import EMBEDDING_DIM
+from pgvector.sqlalchemy import Vector
 
 # revision identifiers, used by Alembic.
 revision: str = "0001_init"

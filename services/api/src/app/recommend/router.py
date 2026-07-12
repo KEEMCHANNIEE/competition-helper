@@ -10,13 +10,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from contest_helper_core.models import AgentJob, Recommendation, User
+from contest_helper_core.schemas import JobResultOut, JobStatus, RecommendationOut
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-
-from contest_helper_core.models import AgentJob, Recommendation, User
-from contest_helper_core.schemas import JobResultOut, JobStatus, RecommendationOut
 
 from app.deps import get_current_user, get_db, get_redis
 from app.queue import enqueue_recommend
@@ -47,7 +46,7 @@ def create_recommendation(
     payload: RecommendRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    redis: "Redis" = Depends(get_redis),
+    redis: Redis = Depends(get_redis),
 ) -> RecommendAccepted:
     """추천 작업 생성. 이미 진행 중인 작업이 있으면 재사용(중복 방지)."""
     existing = db.scalar(

@@ -26,6 +26,8 @@ from worker.mcp_tools import (
     progress,
     semantic,
     tasks,
+)
+from worker.mcp_tools import (
     web_search as web_search_mod,
 )
 

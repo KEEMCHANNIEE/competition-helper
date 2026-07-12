@@ -7,12 +7,11 @@ hermetic: SQLite 로 필요한 테이블(User/AgentJob/Conversation/Message)만 
 from __future__ import annotations
 
 import pytest
+from contest_helper_core.models import AgentJob, Conversation, Message, User
+from contest_helper_core.schemas import ChatJobPayload, JobStatus
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
-
-from contest_helper_core.models import AgentJob, Conversation, Message, User
-from contest_helper_core.schemas import ChatJobPayload, JobStatus
 from worker import main
 from worker.main import CHAT_QUEUE_KEY, handle_chat_job, run_loop
 

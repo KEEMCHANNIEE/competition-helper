@@ -5,10 +5,6 @@
 
 from __future__ import annotations
 
-from fastapi import HTTPException, status
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
 from contest_helper_core.models import (
     Recommendation,
     Task,
@@ -17,6 +13,9 @@ from contest_helper_core.models import (
     WorkspaceMember,
 )
 from contest_helper_core.schemas import TaskIn
+from fastapi import HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 
 def get_workspace_or_404(db: Session, workspace_id: int) -> Workspace:
