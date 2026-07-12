@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.chat.queue import enqueue_chat
 from app.deps import get_current_user, get_db, get_redis
+from app.workspaces import service as workspace_service
 
 if TYPE_CHECKING:
     from redis import Redis
@@ -89,6 +90,77 @@ def create_chat_turn(
         db, redis, user_id=current_user.id, conversation_id=conversation_id
     )
     return ChatAccepted(conversation_id=conversation_id, job_id=job_id)
+
+
+class ConversationSummary(BaseModel):
+    conversation_id: int
+    title: str
+    messages: list[MessageOut]
+
+
+@router.get("/chat", response_model=list[ConversationSummary])
+def list_conversations(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[ConversationSummary]:
+    """현재 사용자의 대화 목록(메시지 포함, 최신순). 프론트가 새로고침 후 대화를 복원한다.
+
+    role=user/assistant 만 채팅 말풍선으로 노출한다(topic/log 는 내부 기록이므로 제외).
+    """
+    convs = db.scalars(
+        select(Conversation)
+        .where(Conversation.user_id == current_user.id)
+        .order_by(Conversation.id.desc())
+    ).all()
+
+    result: list[ConversationSummary] = []
+    for conv in convs:
+        rows = db.scalars(
+            select(Message)
+            .where(
+                Message.conversation_id == conv.id,
+                Message.role.in_(["user", "assistant"]),
+            )
+            .order_by(Message.created_at.asc(), Message.id.asc())
+        ).all()
+        if not rows:
+            continue  # 빈 대화는 건너뛴다
+        title = next((m.content for m in rows if m.role == "user"), "새 대화")[:20]
+        result.append(
+            ConversationSummary(
+                conversation_id=conv.id,
+                title=title,
+                messages=[MessageOut(role=m.role, content=m.content) for m in rows],
+            )
+        )
+    return result
+
+
+class NotificationOut(BaseModel):
+    id: int
+    text: str
+
+
+@router.get("/notifications", response_model=list[NotificationOut])
+def list_notifications(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[NotificationOut]:
+    """현재 사용자의 미확인 알림 목록. 채팅/워크스페이스 입장 시 조회한다. (S-03 STEP03)"""
+    return [
+        NotificationOut(id=n["id"], text=n["text"])
+        for n in workspace_service.list_user_notifications(db, current_user.id)
+    ]
+
+
+@router.post("/notifications/read")
+def read_notifications(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """현재 사용자의 알림을 모두 확인 처리한다."""
+    n = workspace_service.mark_user_notifications_read(db, current_user.id)
+    return {"read": n}
 
 
 @router.get("/chat/{conversation_id}", response_model=ChatStateOut)

@@ -25,3 +25,28 @@ def list_competitions(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="공모전 DB 를 사용할 수 없습니다.",
         ) from exc
+
+
+@router.get("/competitions/{competition_id}")
+def get_competition(
+    competition_id: int,
+    repo: CompetitionRepository = Depends(get_competition_repo),
+) -> dict:
+    """단일 공모전 상세(원본 description 포함). 워크스페이스 화면의 공모전 정보 표시에 사용.
+
+    공유 계약 CompetitionOut 에는 description(중첩 JSON)이 없어, 여기선 dict 로 내려준다.
+    프론트에서 정규화해 쓴다.
+    """
+    try:
+        detail = repo.get_detail(competition_id)
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="공모전 DB 를 사용할 수 없습니다.",
+        ) from exc
+    if detail is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="공모전을 찾을 수 없습니다.",
+        )
+    return detail

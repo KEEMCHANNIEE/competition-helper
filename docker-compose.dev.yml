@@ -1,0 +1,114 @@
+# =============================================================================
+# docker-compose.dev.yml — 로컬 개발용 (전체 스택, 핫리로드 지원)
+#
+# 사용법 (레포 루트에서):
+#   docker compose -f docker-compose.dev.yml --env-file .env up --build
+#   docker compose -f docker-compose.dev.yml down
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # DB + Redis
+  # ---------------------------------------------------------------------------
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: contest_helper
+      POSTGRES_PASSWORD: contest_helper
+      POSTGRES_DB: contest_helper
+    ports:
+      - "5432:5432"
+    volumes:
+      - dev_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U contest_helper -d contest_helper"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # API (FastAPI + --reload 핫리로드)
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: deploy/docker/api.Dockerfile
+    volumes:
+      - ./services/api/src:/app/services/api/src
+      - ./libs/contest_helper_core/src:/app/libs/contest_helper_core/src
+    environment:
+      APP_DB_URL: postgresql+psycopg://contest_helper:contest_helper@db:5432/contest_helper
+      REDIS_URL: redis://redis:6379/0
+      COMPETITION_DB_URL: ${COMPETITION_DB_URL:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-http://localhost:8000/auth/google/callback}
+      SESSION_SECRET: ${SESSION_SECRET:-dev-secret-change-me}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+    command: >
+      sh -c "uv run alembic upgrade head &&
+             uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    working_dir: /app/services/api
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Worker (소스 마운트, 코드 변경 시 재시작 필요)
+  # ---------------------------------------------------------------------------
+  worker:
+    build:
+      context: .
+      dockerfile: deploy/docker/worker.Dockerfile
+    restart: unless-stopped
+    volumes:
+      - ./services/worker/src:/app/services/worker/src
+      - ./libs/contest_helper_core/src:/app/libs/contest_helper_core/src
+    environment:
+      APP_DB_URL: postgresql+psycopg://contest_helper:contest_helper@db:5432/contest_helper
+      REDIS_URL: redis://redis:6379/0
+      COMPETITION_DB_URL: ${COMPETITION_DB_URL:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+  # ---------------------------------------------------------------------------
+  # Frontend (Vite 개발 서버, 핫리로드)
+  # ---------------------------------------------------------------------------
+  web:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ./services/web:/app
+      - web_node_modules:/app/node_modules
+    command: sh -c "npm install && npm run dev -- --host"
+    environment:
+      - VITE_API_URL=http://api:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+
+volumes:
+  dev_db_data:
+  web_node_modules:

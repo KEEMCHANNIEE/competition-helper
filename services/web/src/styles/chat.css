@@ -345,6 +345,7 @@
   resize: none;
   line-height: 1.6;
   padding: 4px 0;
+  min-height: 24px; /* 숨겨진 상태에서 마운트돼도 입력칸이 먹통이 되지 않도록 */
   max-height: 120px;
   overflow-y: auto;
 }

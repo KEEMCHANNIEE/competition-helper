@@ -1,8 +1,10 @@
-import { FiGrid, FiCheckSquare, FiCalendar, FiMessageSquare, FiBookOpen, FiInfo } from "react-icons/fi";
+import { FiGrid, FiCheckSquare, FiCalendar, FiMessageSquare, FiBookOpen, FiInfo, FiActivity, FiBarChart2 } from "react-icons/fi";
 
 const MENU_ITEMS = [
   { key: "dashboard", label: "Dashboard", icon: FiGrid },
   { key: "tasks", label: "Tasks", icon: FiCheckSquare },
+  { key: "logs", label: "실행 로그", icon: FiActivity },
+  { key: "reports", label: "주간 리포트", icon: FiBarChart2 },
   { key: "schedule", label: "Schedule", icon: FiCalendar },
   { key: "meetings", label: "Meetings", icon: FiMessageSquare },
   { key: "insights", label: "Insights", icon: FiBookOpen },

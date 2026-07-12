@@ -36,6 +36,7 @@ from worker.mcp_tools import (
 TOOLS: dict[str, Callable[..., Any]] = {
     "search_competitions": competitions.search_competitions,
     "get_competition_detail": competitions.get_competition_detail,
+    "compare_competitions": competitions.compare_competitions,
     "semantic_search": semantic.semantic_search,
     "create_tasks": tasks.create_tasks,
     "save_progress": progress.save_progress,
