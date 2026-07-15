@@ -78,6 +78,7 @@ from worker.progress_agent import (
     weekly_report,
 )
 from worker.rag import semantic_search
+from worker.style import STYLE_GUIDE
 
 # 의도 분류는 LLM(GeminiClient.generate)이 담당한다. 이 키워드 dict 는 LLM 호출이
 # 실패했을 때(자격증명 문제·네트워크 장애 등) 쓰는 규칙 기반 폴백 전용이다.
@@ -94,12 +95,25 @@ _INTENT_KEYWORDS: dict[str, list[str]] = {
         "워크스페이스 이름", "워크스페이스 수정", "이름 바꿔", "이름을 바꿔", "이름으로 바꿔",
         "공모전 변경", "공모전으로 바꿔", "공모전으로 변경", "공모전 연결", "다시 연결",
     ],
+    # wsinfo 는 조회("현황/상태/어떤")라 workspace(생성)·wsedit(수정) 표현과 겹치지 않는다.
+    "wsinfo": [
+        "워크스페이스 현황", "워크스페이스 상태", "어떤 워크스페이스", "무슨 워크스페이스",
+        "워크스페이스 정보", "워크스페이스 알려줘",
+    ],
+    # select 는 직전 추천 목록에서 하나를 고르는 발화("1번으로 할게", "OO대회로 하자").
+    # 예전엔 아무 인텐트에도 안 걸려 study 로 새면서 워크스페이스 생성으로 이어지지
+    # 못했다. "확정" 은 주제 확정("첫 번째 주제로 확정 ... 계획 짜줘", S-01 STEP05)이
+    # plan 대신 여기 걸리지 않도록 넣지 않는다.
+    "select": [
+        "로 할게", "로 하자", "로 결정", "로 진행하자", "이걸로", "그걸로", "번으로 갈게",
+    ],
     # topic 은 "주제 추천" 처럼 recommend("추천") 과 겹칠 수 있어 recommend 보다 먼저 둔다.
     "topic": ["주제 추천", "주제 제안", "주제 후보", "주제 정해", "주제 뽑", "무슨 주제", "어떤 주제"],
     # advice 는 특정 할 일을 "어떻게 시작/진행"할지 방법을 묻는 질문(S-02 STEP01).
     # plan("계획/일정") 과 겹치지 않도록 "어떻게 ~" 표현 위주로 잡고 plan 보다 먼저 검사.
     "advice": ["어떻게 시작", "어떻게 하면 좋을", "어떻게 진행하면", "어떻게 접근", "어디서부터", "어떻게 해야 할"],
-    "plan": ["계획", "일정", "역할", "스케줄", "마감까지"],
+    # "주차" 는 계획 저장 후 "1주차 줄여줘" 같은 수정 요청이 plan 으로 다시 오게 한다.
+    "plan": ["계획", "일정", "역할", "스케줄", "마감까지", "주차"],
     # "찾아줘"만 넣으면 "수상작 찾아줘"처럼 이미 언급된 공모전에 대한 사실 질문(study)까지
     # 걸려버려서, 새 공모전 탐색 의미가 뚜렷한 표현으로만 좁힌다.
     "recommend": ["추천", "공모전 찾아줘", "공모전 알려줘", "뭐가 있어"],
@@ -209,7 +223,19 @@ def chat(
         (m.content for m in reversed(history) if m.role == "user"), ""
     )
 
-    message: dict = _classify_intent(last_user_msg, llm=llm)  # {"intent": ..., "matched_on": ...}
+    # 직전 답변이 "~해 볼까요?" 제안으로 끝났고 사용자가 짧게 수락한 경우,
+    # "응/좋아" 가 study 로 새지 않도록 그 제안의 인텐트로 바로 확정한다.
+    accepted = _accepted_offer_intent(history, last_user_msg)
+    if accepted:
+        message: dict = {"intent": accepted, "matched_on": "offer"}
+        if accepted in ("workspace", "wsedit"):
+            # 수락 메시지("응")엔 순번·이름이 없으므로, 제안의 근거였던 직전 사용자
+            # 발화("1번으로 할게")를 공모전 특정용 컨텍스트로 쓴다.
+            user_msgs = [m.content for m in history if m.role == "user"]
+            if len(user_msgs) >= 2:
+                last_user_msg = user_msgs[-2]
+    else:
+        message = _classify_intent(last_user_msg, llm=llm)  # {"intent": ..., "matched_on": ...}
     # 데모/디버그용 로그: worker 컨테이너 로그에서 intent 분류 결과를 실시간으로 본다.
     print(
         f"[chat] conv={conversation_id} intent={message['intent']} "
@@ -230,6 +256,17 @@ def chat(
         return _handle_workspace_edit(
             conversation_id, last_user_msg, session_factory=session_factory, llm=llm
         )
+    if message["intent"] == "wsinfo":
+        return _handle_workspace_info(
+            conversation_id, tools, session_factory=session_factory
+        )
+    if message["intent"] == "select":
+        reply = _handle_select(
+            conversation_id, last_user_msg, session_factory=session_factory
+        )
+        if reply is not None:
+            return reply
+        # 고를 추천 목록이 없었으면 일반 질문으로 취급(study 폴백).
     if message["intent"] == "background":
         return _handle_background(
             conversation_id, session_factory=session_factory
@@ -276,6 +313,39 @@ def chat(
 # --------------------------------------------------------------------------- #
 
 
+# 어시스턴트가 답변 끝에 던지는 제안 문구 → 사용자가 수락하면 확정할 인텐트.
+_OFFER_MARKERS: list[tuple[str, str]] = [
+    ("주제 후보를 제안해 볼까요", "topic"),
+    ("워크스페이스를 만들까요", "workspace"),
+    ("바꿔 연결할까요", "wsedit"),
+    ("계획을 짜 볼까요", "plan"),
+]
+_AFFIRMATIONS = ("응", "네", "넵", "예", "그래", "좋아", "좋지", "콜", "오케이", "ㅇㅋ", "고고", "해줘", "해 줘", "부탁")
+_NEGATIONS = ("아니", "안 ", "말고", "나중에", "됐어", "괜찮아")
+
+
+def _accepted_offer_intent(history: list[MessageOut], last_user_msg: str) -> str | None:
+    """직전 어시스턴트 답변의 제안("~해 볼까요?")을 사용자가 짧게 수락했으면 그 인텐트를 반환한다.
+
+    "응"/"좋아" 같은 짧은 수락은 키워드·LLM 분류 모두 study 로 새기 쉬워서,
+    제안-수락 짝을 여기서 먼저 확정한다. 길거나 부정이 섞인 메시지는 건드리지 않는다.
+    """
+    text = last_user_msg.strip()
+    if not text or len(text) > 12:
+        return None
+    if any(neg in text for neg in _NEGATIONS):
+        return None
+    if not any(word in text for word in _AFFIRMATIONS):
+        return None
+    last_assistant = next(
+        (m.content for m in reversed(history) if m.role == "assistant"), ""
+    )
+    for marker, intent in _OFFER_MARKERS:
+        if marker in last_assistant:
+            return intent
+    return None
+
+
 def _classify_intent(text: str, *, llm: LLMClient | None = None) -> dict:
     """사용자의 마지막 메시지를 LLM 으로 추천/공부/계획/진행률 중 하나로 분류한다.
 
@@ -296,18 +366,26 @@ def _classify_intent(text: str, *, llm: LLMClient | None = None) -> dict:
     # "현황 어때/계획 괜찮아?"(S-03 STEP02) 리스크 점검도 먼저 확정한다.
     if any(k in text for k in _INTENT_KEYWORDS["riskcheck"]):
         return {"intent": "riskcheck", "matched_on": "keyword"}
+    # "OO로 하자/할게" 선택 발화는 LLM 이 wsedit/plan 으로 오분류하기 쉬워 먼저
+    # 확정한다. 단, 워크스페이스 생성·계획 요청이 같이 있으면 그쪽이 우선.
+    if any(k in text for k in _INTENT_KEYWORDS["select"]) and not any(
+        k in text for k in _INTENT_KEYWORDS["workspace"] + _INTENT_KEYWORDS["plan"]
+    ):
+        return {"intent": "select", "matched_on": "keyword"}
 
     prompt = f"""당신은 공모전 준비를 돕는 챗봇의 의도 분류기입니다.
-아래 사용자 메시지를 다음 열세 가지 중 정확히 하나로 분류하고, 그 단어 하나만 답하세요.
+아래 사용자 메시지를 다음 목록 중 정확히 하나로 분류하고, 그 단어 하나만 답하세요.
 다른 설명이나 문장부호 없이 단어 하나만 출력해야 합니다.
 
 - workspace: 아직 없는 워크스페이스를 "새로" 만들어 달라는 요청일 때만 (예: "워크스페이스 만들어줘", "1번으로 워크스페이스 만들어줘"). "바꿔줘/수정해줘/변경해줘"처럼 이미 있는 걸 고치는 요청이면 절대 이게 아니라 wsedit.
 - wsedit: 이미 있는 워크스페이스의 이름을 바꾸거나 연결된 공모전을 다른 것으로 바꿔 달라는 요청 (예: "워크스페이스 이름 바꿔줘", "1번 공모전으로 다시 연결해줘", "공모전 바꿔줘")
+- wsinfo: 지금 연결된 워크스페이스가 뭔지, 그 현황·상태를 물어봄 (예: "지금 어떤 워크스페이스야?", "워크스페이스 현황 알려줘")
+- select: 직전에 보여준 목록에서 하나를 골라 확정하는 발화. 순번("1번으로 할게", "첫 번째 걸로 하자")뿐 아니라 이름으로 고르는 것("그럼 OO공모전으로 하자")도 포함. 단, 같은 메시지에 워크스페이스 생성이나 계획 요청이 함께 있으면 select 가 아니라 그쪽(workspace/plan)으로 분류.
 - log: 작업 내용을 저장/기록/남겨 달라고 "명시적으로" 요청할 때만 (예: "오늘 작업한 거 저장해줘"). 단순히 오늘 한 일을 서술하면 study.
 - background: 자기(팀원)의 경험·관심·강점을 소개하거나 진술 (예: "나는 데이터 분석 경험이 있어")
 - topic: 주제/아이디어 후보를 제안해 달라고 "명시적으로" 요청할 때만
 - advice: 이미 정해진 특정 할 일(작업)을 어떻게 시작·진행하면 좋을지 방법이나 방향을 물어봄 (예: "○○ 데이터 수집해야 하는데 어떻게 시작하면 좋을까?")
-- plan: 준비 계획·일정·역할 분담을 요청
+- plan: 준비 계획·일정·역할 분담을 요청. 이미 세운 계획의 수정·조정 요청도 포함 (예: "1주차 줄여줘", "계획 다시 짜줘")
 - recommend: 아직 안 정한 "새 공모전"을 찾아/추천해 달라는 요청 (예: "공모전 추천해줘", "마케팅 관련 공모전 찾아줘")
 - progress: (개인) 지금까지의 진행 상황·진척도를 물어봄
 - teamstatus: 팀 전체(팀원별)가 각각 무엇을 했는지 실행 현황을 물어봄 (예: "팀 전체 진행 현황 알려줘", "누가 뭐 했어?")
@@ -399,11 +477,17 @@ def _handle_plan(
     """확정 주제·팀원 배경·공모전 마감을 참고해 주차별 계획을 LLM 으로 뽑아
     여러 개의 ``Task`` (week_no 포함)로 워크스페이스에 저장한다. (S-01 STEP05)
 
-    LLM 실패/파싱 실패 시엔 메시지 전체를 할 일 1개로 저장하는 폴백을 쓴다.
+    이미 계획이 있으면 "추가"가 아니라 "교체"한다: 미완료(todo) 할 일을 지우고
+    기존 계획+수정 요청을 반영한 새 계획으로 갈아끼운다(완료된 할 일은 보존).
+    LLM 실패/파싱 실패 시엔 기존 계획을 건드리지 않는다(첫 계획일 때만
+    메시지 전체를 할 일 1개로 저장하는 폴백).
     """
     workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
     if workspace_id is None:
-        return "이 대화는 아직 워크스페이스에 연결돼 있지 않아요. 먼저 워크스페이스를 만들어 주세요."
+        return (
+            "아직 연결된 워크스페이스가 없어요. "
+            "공모전을 정해 워크스페이스부터 만들면 이어서 도와드릴 수 있어요 — 준비 중인 공모전이 있나요?"
+        )
 
     # 맥락 수집: 확정 주제(role=topic), 팀원 배경, 공모전 마감.
     history = load_history(conversation_id, session_factory=session_factory)
@@ -416,6 +500,52 @@ def _handle_plan(
         and _classify_intent_by_keyword(m.content)["intent"] in ("study", "background")
     )
     deadline = _load_deadline(workspace_id, tools, session_factory=session_factory)
+
+    if session_factory is None:
+        session_factory = _default_session_factory()
+
+    # 기존 계획 파악 — 있으면 이번 요청은 "수정"이고, 미완료 할 일은 새 계획으로 교체한다.
+    with session_factory() as session:
+        existing = (
+            session.execute(
+                select(Task)
+                .where(Task.workspace_id == workspace_id)
+                .order_by(Task.week_no.asc(), Task.id.asc())
+            )
+            .scalars()
+            .all()
+        )
+        prev_todo_ids = [t.id for t in existing if t.status != "done"]
+        prev_plan_text = "\n".join(
+            f"{t.week_no or 1}주차 | {t.title}" for t in existing if t.status != "done"
+        )
+        done_titles = [t.title for t in existing if t.status == "done"]
+
+    # 계획의 재료(주제·배경·마감·기존 계획)가 하나도 없으면 일반론을 지어내지 말고
+    # 먼저 묻는다(참여 유도).
+    if not existing and not topic and not backgrounds and not deadline:
+        return (
+            "계획을 짜기 전에 재료가 조금 필요해요. 어떤 공모전(또는 주제)을 준비하시나요? "
+            "팀원들의 경험·강점도 알려주시면 역할 분담까지 함께 잡아 드릴게요."
+        )
+
+    revise_block = ""
+    if prev_plan_text:
+        done_block = (
+            "\n이미 완료된 할 일 (새 계획에 다시 넣지 마세요):\n"
+            + "\n".join(f"- {t}" for t in done_titles)
+            if done_titles
+            else ""
+        )
+        revise_block = f"""
+
+[기존 계획 — 아직 미완료]
+{prev_plan_text}
+{done_block}
+[수정 요청]
+{last_user_msg}
+
+기존 계획을 수정 요청에 맞게 고친 "전체 계획"을 출력하세요. 그대로 유지할 항목도 빠짐없이 다시 출력해야 합니다."""
 
     prompt = f"""당신은 공모전 팀의 준비 일정을 짜는 코치입니다.
 
@@ -436,7 +566,7 @@ def _handle_plan(
 1주차 | 2030 소비 트렌드 데이터 수집
 2주차 | SNS 반응률-구매 전환율 교차 분석
 3주차 | 전략 수립 및 문서화
-4주차 | 검토·수정 후 최종 제출"""
+4주차 | 검토·수정 후 최종 제출{revise_block}"""
 
     try:
         raw = (llm or GeminiClient()).generate(prompt)
@@ -445,15 +575,30 @@ def _handle_plan(
         plan = []
 
     if not plan:
-        # 폴백: LLM 실패 시 메시지 전체를 할 일 1개로.
+        if prev_todo_ids:
+            # 수정 생성에 실패했으면 기존 계획을 지우지 않고 그대로 둔다.
+            return "지금은 계획을 수정하지 못했어요. 잠시 후 다시 요청해 주시겠어요?"
+        # 폴백: 첫 계획인데 LLM 실패 시 메시지 전체를 할 일 1개로.
         plan = [TaskIn(title=last_user_msg[:200] or "계획 정리", week_no=1)]
+
+    # 교체: 미완료 할 일 삭제(완료된 할 일은 작업 기록이므로 보존).
+    replaced = 0
+    if prev_todo_ids:
+        with session_factory() as session:
+            rows = (
+                session.execute(select(Task).where(Task.id.in_(prev_todo_ids)))
+                .scalars()
+                .all()
+            )
+            for t in rows:
+                session.delete(t)
+            replaced = len(rows)
+            session.commit()
 
     saved = tools["create_tasks"](workspace_id=workspace_id, tasks=plan)
 
     # [데모] 팀원을 보장하고 방금 만든 할 일을 4명에게 배정한다(주차별로 A/B/C/D 고르게).
     # (완료율은 각자 작업/시뮬레이션으로 채워지며, 여기선 배정만 한다.)
-    if session_factory is None:
-        session_factory = _default_session_factory()
     with session_factory() as session:
         ws = session.get(Workspace, workspace_id)
         member_ids = _ensure_team_members(session, workspace_id, ws.owner_id)
@@ -483,11 +628,15 @@ def _handle_plan(
                     session,
                     workspace_id,
                     [uid],
-                    f"{owner_name}님이 주차별 계획을 세우고 할 일을 나눴어요 — 내 담당 {cnt}개",
+                    (
+                        f"{owner_name}님이 계획을 조정했어요 — 내 담당 {cnt}개"
+                        if replaced
+                        else f"{owner_name}님이 주차별 계획을 세우고 할 일을 나눴어요 — 내 담당 {cnt}개"
+                    ),
                 )
         session.commit()
 
-    return _format_plan_reply(saved)
+    return _format_plan_reply(saved, replaced=replaced, kept_done=len(done_titles))
 
 
 def _parse_plan(raw: str) -> list[TaskIn]:
@@ -505,15 +654,22 @@ def _parse_plan(raw: str) -> list[TaskIn]:
     return plan
 
 
-def _format_plan_reply(saved) -> str:
+def _format_plan_reply(saved, *, replaced: int = 0, kept_done: int = 0) -> str:
     """저장된 Task 들을 주차별로 묶어 사람이 읽기 좋은 응답으로 만든다."""
     by_week: dict[int, list[str]] = {}
     for t in saved:
         by_week.setdefault(t.week_no or 0, []).append(t.title)
-    lines = ["주차별 계획을 워크스페이스 할 일로 저장했어요."]
+    if replaced:
+        head = f"기존 미완료 할 일 {replaced}개를 새 계획으로 교체했어요."
+        if kept_done:
+            head += f" (완료된 {kept_done}개는 그대로 뒀어요)"
+    else:
+        head = "주차별 계획을 워크스페이스에 저장했어요."
+    lines = [head]
     for wk in sorted(by_week):
         lines.append(f"\n[{wk}주차]" if wk else "\n[기타]")
         lines.extend(f"- {title}" for title in by_week[wk])
+    lines.append("\n조정하고 싶은 주차나 배분이 있나요? 말씀해 주시면 바로 반영할게요.")
     return "\n".join(lines)
 
 
@@ -559,7 +715,9 @@ def _handle_create_workspace(
         session_factory = _default_session_factory()
 
     # 메시지에 순번/이름이 있으면 직전 추천 목록에서 그 공모전을 찾는다.
-    contest_id, contest_title, ambiguous = _extract_contest(
+    # "국가데이터 활용대회로 하자" → "워크스페이스 만들어 줘"처럼 선택이 앞 턴에
+    # 있었던 경우까지 커버하도록 최근 선택 발화도 함께 본다.
+    contest_id, contest_title, ambiguous = _extract_contest_with_context(
         last_user_msg, conversation_id, session_factory=session_factory
     )
     if ambiguous:
@@ -572,10 +730,7 @@ def _handle_create_workspace(
         if conv.workspace_id is not None:
             ws = session.get(Workspace, conv.workspace_id)
             name = ws.name if ws else "워크스페이스"
-            return (
-                f"이미 '{name}' 워크스페이스에 연결돼 있어요. "
-                "'계획 짜줘'로 할 일을 나누거나 '진행 상황 알려줘'로 진척도를 확인해 보세요."
-            )
+            return f"이미 '{name}' 워크스페이스에 연결돼 있어요. 이어서 무엇을 도와드릴까요?"
 
         name = contest_title or _workspace_name_from(last_user_msg)
         ws = Workspace(name=name, owner_id=user_id, contest_id=contest_id)
@@ -607,8 +762,8 @@ def _handle_create_workspace(
 
     linked = f"'{name}' 공모전에 맞춘 " if contest_id is not None else f"'{name}' "
     return (
-        f"{linked}워크스페이스를 만들고 이 대화에 연결했어요. 팀원들에게 알림도 보냈어요. "
-        "이제 '주제 후보 제안해줘', '계획 짜줘', '진행 상황 알려줘'를 이어서 해보세요."
+        f"{linked}워크스페이스를 만들고 팀원들에게 알렸어요. "
+        "주제를 잡으려면 팀원들의 경험·강점이 필요한데, 각자 어떤 걸 잘하는지 들려주시겠어요?"
     )
 
 
@@ -631,7 +786,17 @@ def _handle_workspace_edit(
 
     workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
     if workspace_id is None:
-        return "이 대화는 아직 워크스페이스에 연결돼 있지 않아요. 먼저 워크스페이스를 만들어 주세요."
+        # 워크스페이스가 없는데 메시지가 공모전을 가리키면(LLM 이 선택 발화를 wsedit
+        # 으로 오분류한 경우 등) 거절 대신 생성을 제안한다.
+        offer = _handle_select(
+            conversation_id, last_user_msg, session_factory=session_factory
+        )
+        if offer is not None:
+            return offer
+        return (
+            "아직 연결된 워크스페이스가 없어요. "
+            "공모전을 정해 워크스페이스부터 만들면 이어서 도와드릴 수 있어요 — 준비 중인 공모전이 있나요?"
+        )
 
     new_name = _extract_new_workspace_name(last_user_msg, llm=llm)
     contest_id, contest_title, ambiguous = _extract_contest(
@@ -690,6 +855,126 @@ def _extract_new_workspace_name(text: str, *, llm: LLMClient | None = None) -> s
     if not name or name == "없음":
         return None
     return name[:200]
+
+
+def _handle_select(
+    conversation_id: int,
+    last_user_msg: str,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+) -> str | None:
+    """추천 목록에서 하나를 고르는 발화("1번으로 할게")를 받아 다음 행동을 제안한다.
+
+    예전엔 이런 선택 발화가 어떤 인텐트에도 안 걸려 study 로 새면서 워크스페이스
+    생성으로 이어지지 못했다(생성 트리거 공백). 여기서 선택을 확인해 주고
+    워크스페이스 생성(또는 이미 있으면 공모전 재연결)을 제안한다. 실제 실행은
+    사용자가 수락하면 ``_accepted_offer_intent`` 가 workspace/wsedit 으로 잇는다.
+
+    Returns:
+        답변 텍스트. 참조할 추천 목록 자체가 없으면 None (호출부가 study 폴백).
+    """
+    # 주제 후보 목록이 추천 목록보다 최신이면 이 선택은 공모전이 아니라 주제 확정이다.
+    if _topic_is_latest(conversation_id, session_factory=session_factory):
+        return (
+            "좋아요, 그 주제로 확정할게요. 이제 마감까지의 주차별 계획을 짜 볼까요? "
+            "팀원별 역할 분담까지 같이 정리해 드려요."
+        )
+
+    contest_id, contest_title, ambiguous = _extract_contest(
+        last_user_msg, conversation_id, session_factory=session_factory
+    )
+    if ambiguous:
+        return "몇 번을 고르신 건지 정확히 모르겠어요. 순번이나 공모전 이름으로 다시 말씀해 주시겠어요?"
+    if contest_id is None:
+        return None
+
+    workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
+    if workspace_id is None:
+        return (
+            f"'{contest_title}'로 정하셨네요, 좋은 선택이에요. "
+            "팀원들과 준비를 시작하도록 이 공모전으로 워크스페이스를 만들까요?"
+        )
+
+    if session_factory is None:
+        session_factory = _default_session_factory()
+    with session_factory() as session:
+        ws = session.get(Workspace, workspace_id)
+        ws_name = ws.name if ws else "워크스페이스"
+        already_linked = ws is not None and ws.contest_id == contest_id
+    if already_linked:
+        return f"'{contest_title}'는 이미 '{ws_name}' 워크스페이스에 연결돼 있어요. 이어서 무엇을 도와드릴까요?"
+    return (
+        f"'{contest_title}'로 정하셨네요. "
+        f"지금 '{ws_name}' 워크스페이스의 공모전을 이걸로 바꿔 연결할까요?"
+    )
+
+
+def _topic_is_latest(
+    conversation_id: int,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+) -> bool:
+    """이 대화에서 주제 후보(topic)가 추천 목록(recommend)보다 나중에 제시됐는지."""
+    history = load_history(conversation_id, session_factory=session_factory)
+    latest = next(
+        (m.role for m in reversed(history) if m.role in ("topic", "recommend")), None
+    )
+    return latest == "topic"
+
+
+def _handle_workspace_info(
+    conversation_id: int,
+    tools: dict,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+) -> str:
+    """연결된 워크스페이스의 현황(공모전·팀원·할 일 진행)을 요약해 보여준다."""
+    workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
+    if workspace_id is None:
+        return (
+            "아직 이 대화에 연결된 워크스페이스가 없어요. "
+            "공모전을 추천받아 고르시면 바로 만들어 드릴게요 — 어떤 분야에 관심 있으세요?"
+        )
+
+    if session_factory is None:
+        session_factory = _default_session_factory()
+    with session_factory() as session:
+        ws = session.get(Workspace, workspace_id)
+        if ws is None:
+            return "워크스페이스를 찾을 수 없어요. 잠시 후 다시 시도해 주세요."
+        ws_name = ws.name
+        members = session.execute(
+            select(User.name)
+            .join(WorkspaceMember, WorkspaceMember.user_id == User.id)
+            .where(WorkspaceMember.workspace_id == workspace_id)
+            .order_by(WorkspaceMember.id.asc())
+        ).scalars().all()
+        tasks_rows = session.execute(
+            select(Task.status).where(Task.workspace_id == workspace_id)
+        ).scalars().all()
+
+    contest = _load_contest_brief(workspace_id, tools, session_factory=session_factory)
+    if contest is not None:
+        deadline = getattr(contest, "deadline", None)
+        contest_line = f"{contest.title}" + (f" (마감 {deadline})" if deadline else "")
+    else:
+        contest_line = "아직 연결 안 됨"
+
+    total = len(tasks_rows)
+    done = sum(1 for s in tasks_rows if s == "done")
+    task_line = (
+        f"{done}/{total}개 완료 ({round(done / total * 100)}%)" if total else "아직 없음"
+    )
+
+    lines = [
+        f"'{ws_name}' 워크스페이스 현황이에요.",
+        f"- 공모전: {contest_line}",
+        f"- 팀원 {len(members)}명: {', '.join(members)}" if members else "- 팀원: 아직 없음",
+        f"- 할 일: {task_line}",
+        "",
+        "이름을 바꾸거나 다른 공모전으로 다시 연결할 수도 있어요. 조정할 게 있나요?",
+    ]
+    return "\n".join(lines)
 
 
 def _notify_members(
@@ -769,15 +1054,49 @@ def _extract_contest(
             entry = entries[n - 1]
             return entry["id"], entry["title"], False
 
-    words = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", text))
+    # 제목 단어가 메시지 안에 "부분문자열"로 있는지 센다. 토큰 집합 교집합 방식은
+    # "국가데이터 활용대회로 하자"처럼 조사가 붙으면("활용대회로") 매칭이 깨진다.
     best, best_score = None, 0
     for entry in entries:
-        overlap = len(words & set(re.findall(r"[가-힣A-Za-z0-9]{2,}", entry["title"])))
+        title_tokens = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", entry["title"]))
+        overlap = sum(1 for tok in title_tokens if tok in text)
         if overlap > best_score:
             best, best_score = entry, overlap
     if best is not None:
         return best["id"], best["title"], False
 
+    return None, None, False
+
+
+def _extract_contest_with_context(
+    text: str,
+    conversation_id: int,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+) -> tuple[int | None, str | None, bool]:
+    """현재 메시지에서 공모전을 못 찾으면 최근 사용자 발화까지 거슬러 찾는다.
+
+    "국가데이터 활용대회로 하자" 뒤에 "워크스페이스 만들어 줘"처럼 선택과 생성이
+    다른 턴에 오면, 생성 메시지만 봐서는 공모전을 특정할 수 없어 '새 워크스페이스'가
+    돼버린다. 오연결을 막기 위해 과거 발화는 선택 발화(select 키워드)로 분류되는
+    것만 본다("추천해줘" 같은 검색 요청의 단어 겹침에 낚이지 않도록).
+    """
+    result = _extract_contest(text, conversation_id, session_factory=session_factory)
+    if result[0] is not None or result[2]:
+        return result
+
+    history = load_history(conversation_id, session_factory=session_factory)
+    user_msgs = [m.content for m in history if m.role == "user"]
+    for msg in reversed(user_msgs[-5:]):
+        if msg == text:
+            continue
+        if _classify_intent_by_keyword(msg)["intent"] != "select":
+            continue
+        rid, rtitle, ambiguous = _extract_contest(
+            msg, conversation_id, session_factory=session_factory
+        )
+        if rid is not None and not ambiguous:
+            return rid, rtitle, False
     return None, None, False
 
 
@@ -812,7 +1131,10 @@ def _handle_log(
     """
     workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
     if workspace_id is None:
-        return "이 대화는 아직 워크스페이스에 연결돼 있지 않아요. 먼저 워크스페이스를 만들어 주세요."
+        return (
+            "아직 연결된 워크스페이스가 없어요. "
+            "공모전을 정해 워크스페이스부터 만들면 이어서 도와드릴 수 있어요 — 준비 중인 공모전이 있나요?"
+        )
 
     history = load_history(conversation_id, session_factory=session_factory)
     convo = [m for m in history if m.role in ("user", "assistant") and m.content.strip()]
@@ -952,7 +1274,11 @@ def _handle_topic(
         )
         session.commit()
 
-    return candidates
+    # 후보만 던지고 끝내지 않고 사용자의 선택을 끌어낸다(참여 유도).
+    return (
+        f"{candidates}\n\n"
+        "둘 중 어느 쪽이 더 끌리나요? 좁히거나 두 후보를 섞어서 다시 제안할 수도 있어요."
+    )
 
 
 def _handle_background(
@@ -974,10 +1300,14 @@ def _handle_background(
         and m.content.strip()
         and _classify_intent_by_keyword(m.content)["intent"] in ("study", "background")
     )
+    if gathered >= 3:
+        return (
+            f"기억해뒀어요. 배경이 {gathered}개 모여서 주제를 잡기에 충분해요. "
+            "지금까지 모인 강점으로 주제 후보를 제안해 볼까요?"
+        )
     return (
-        f"좋아요, 팀원 배경으로 기억해뒀어요. (지금까지 {gathered}개) "
-        "배경이 더 모이면 '주제 후보 제안해줘'라고 말해 주세요. "
-        "여러 배경을 종합해 어울리는 공모전 주제를 제안해 드릴게요."
+        f"기억해뒀어요. (지금까지 배경 {gathered}개) "
+        "다른 팀원들은 어떤 경험이나 강점이 있나요?"
     )
 
 
@@ -1158,7 +1488,9 @@ def _handle_recommend(
             results = search_competitions(keyword=None, open_only=True, filters=filters, limit=5)
 
         if results:
-            db_results = results
+            # 상세 정보가 있으면 상세 객체를 저장해, role="recommend" 기록(→ 프론트 카드)에
+            # 마감·상금·카테고리까지 실리게 한다.
+            db_results = []
             tool_context = (
                 "\n\n[검색 결과 - 아래 목록만 사용하고 없는 공모전은 절대 만들지 마세요. "
                 "각 항목 앞의 번호를 그대로 답변에도 순서대로 남기세요(1. 2. 3. ...). "
@@ -1166,6 +1498,7 @@ def _handle_recommend(
             )
             for i, c in enumerate(results, start=1):
                 detail = get_competition_detail(c.id)
+                db_results.append(detail or c)
                 if detail:
                     deadline = f"마감: {detail.deadline}" if detail.deadline else ""
                     categories = ", ".join(detail.category[:3])
@@ -1218,13 +1551,14 @@ def _handle_recommend(
    요구사항이 충분히 파악된 경우에만 아래 [검색 결과]를 활용해 추천하세요.
    검색 결과에 없는 공모전은 절대 만들어내지 마세요.
 
+{STYLE_GUIDE}
+
 [답변 형식 규칙]
-- 실제 정보를 전달할 때(공모전 목록, 계획, 팁 등 여러 항목)만 아래 구조를 사용하세요.
-- 여러 항목은 각각 <details><summary>제목</summary>내용</details> 형식으로 접을 수 있게 만드세요.
-- 전체 요약은 <details> 밖에 2~3문장으로 먼저 쓰세요.
-- 마크다운(**, ##, -)도 함께 사용 가능합니다.
-- [검색 결과]에 번호가 매겨진 공모전은 그 번호를 "1. 공모전명"처럼 그대로 답변에 남기세요.
-  내부 고유번호(id)는 어떤 형태로도 사용자에게 보여주면 안 됩니다.
+- [검색 결과]가 있을 때: 마감·상금·자격 같은 상세 정보는 화면에 카드로 함께 표시되므로
+  답변에서 반복하지 마세요. 왜 이 목록을 골랐는지 1~2문장으로 말한 뒤, 각 항목을
+  "1. 공모전명 — 이 사용자에게 맞는 이유 한 줄" 형태로만 쓰세요(번호는 [검색 결과]의
+  번호 그대로). 내부 고유번호(id)는 어떤 형태로도 사용자에게 보여주면 안 됩니다.
+- 마지막은 사용자의 선택을 묻는 질문 1개로 마치세요(예: 더 자세히 볼 항목, 조건 변경 여부).
 - 아래 [대화 기록] 뒤에 실제 [검색 결과]/[웹 검색 결과] 블록이 없다면, 번호가 매겨진
   공모전 목록을 절대로 스스로 만들어내지 마세요. 검색이 아직 안 됐거나 결과가 없다는
   사실을 그대로 말하고, 필요한 정보(분야/참여형태/목표 등)를 물어보세요.
@@ -1258,7 +1592,10 @@ def _handle_progress(
 ) -> str:
     workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
     if workspace_id is None:
-        return "이 대화는 아직 워크스페이스에 연결돼 있지 않아요. 먼저 워크스페이스를 만들어 주세요."
+        return (
+            "아직 연결된 워크스페이스가 없어요. "
+            "공모전을 정해 워크스페이스부터 만들면 이어서 도와드릴 수 있어요 — 준비 중인 공모전이 있나요?"
+        )
 
     result = evaluate_progress(
         workspace_id, user_id, session_factory=session_factory, tools=tools, llm=llm
@@ -1281,7 +1618,10 @@ def _handle_report(
     """
     workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
     if workspace_id is None:
-        return "이 대화는 아직 워크스페이스에 연결돼 있지 않아요. 먼저 워크스페이스를 만들어 주세요."
+        return (
+            "아직 연결된 워크스페이스가 없어요. "
+            "공모전을 정해 워크스페이스부터 만들면 이어서 도와드릴 수 있어요 — 준비 중인 공모전이 있나요?"
+        )
     report = weekly_report(workspace_id, session_factory=session_factory)
     body = format_weekly_report(report)
 
@@ -1333,7 +1673,10 @@ def _handle_team_status(
     """
     workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
     if workspace_id is None:
-        return "이 대화는 아직 워크스페이스에 연결돼 있지 않아요. 먼저 워크스페이스를 만들어 주세요."
+        return (
+            "아직 연결된 워크스페이스가 없어요. "
+            "공모전을 정해 워크스페이스부터 만들면 이어서 도와드릴 수 있어요 — 준비 중인 공모전이 있나요?"
+        )
 
     if session_factory is None:
         session_factory = _default_session_factory()
@@ -1391,7 +1734,10 @@ def _handle_risk_check(
     """
     workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
     if workspace_id is None:
-        return "이 대화는 아직 워크스페이스에 연결돼 있지 않아요. 먼저 워크스페이스를 만들어 주세요."
+        return (
+            "아직 연결된 워크스페이스가 없어요. "
+            "공모전을 정해 워크스페이스부터 만들면 이어서 도와드릴 수 있어요 — 준비 중인 공모전이 있나요?"
+        )
 
     report = weekly_report(workspace_id, session_factory=session_factory)
     graded = [m for m in report["members"] if m["total"] > 0]

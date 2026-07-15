@@ -23,6 +23,7 @@ from contest_helper_core.db import get_engine
 from contest_helper_core.models import Conversation, Message, Recommendation
 from contest_helper_core.schemas import MessageOut
 from worker.llm import GeminiClient, LLMClient
+from worker.style import STYLE_GUIDE
 from worker.team_fit import evaluate_team_fit
 
 
@@ -79,6 +80,8 @@ def _handle_study(
    금지됩니다. 이런 말은 도구를 실제로 호출해서 결과를 받아본 뒤, 그 결과가
    부족할 때만 사실대로 쓸 수 있습니다.
 3. 개념 설명처럼 도구 없이도 확실히 답할 수 있는 질문은 그냥 답하세요.
+
+{STYLE_GUIDE}
 
 [대화 기록]
 {history_text}
@@ -192,13 +195,28 @@ def save_recommend_list(
 
     Returns:
         ``[{"ordinal": 1, "id": 12, "title": "..."}, ...]`` 형태의 목록.
+        객체에 마감·카테고리·상금 정보가 있으면 함께 저장한다 — 프론트가 이 기록을
+        읽어 추천 카드를 그린다(답변 텍스트에는 상세를 반복하지 않는 분업).
     """
     if session_factory is None:
         session_factory = sessionmaker(bind=get_engine(), expire_on_commit=False)
 
-    entries = [
-        {"ordinal": i + 1, "id": c.id, "title": c.title} for i, c in enumerate(competitions)
-    ]
+    entries = []
+    for i, c in enumerate(competitions):
+        entry: dict = {"ordinal": i + 1, "id": c.id, "title": c.title}
+        deadline = getattr(c, "deadline", None)
+        if deadline is not None:
+            entry["deadline"] = str(deadline)
+        category = getattr(c, "category", None)
+        if category:
+            entry["category"] = list(category)[:3]
+        prize = getattr(c, "first_prize_amount", None)
+        if prize:
+            entry["first_prize_amount"] = prize
+        team = getattr(c, "team_config", None)
+        if team:
+            entry["team_config"] = team
+        entries.append(entry)
     with session_factory() as session:
         session.add(
             Message(
