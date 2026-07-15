@@ -101,6 +101,66 @@ def test_add_and_list_tasks(client):
     assert tasks[0]["title"] == "아이디어 회의"
 
 
+def test_update_task_status_toggles_done(client):
+    ws_id = client.post("/workspaces", json={"name": "팀A"}).json()["id"]
+    task_id = client.post(
+        f"/workspaces/{ws_id}/tasks", json={"title": "기획서 작성"}
+    ).json()["id"]
+
+    resp = client.patch(
+        f"/workspaces/{ws_id}/tasks/{task_id}", json={"status": "done"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "done"
+
+    # 다시 미완료로.
+    resp2 = client.patch(
+        f"/workspaces/{ws_id}/tasks/{task_id}", json={"status": "todo"}
+    )
+    assert resp2.status_code == 200
+    assert resp2.json()["status"] == "todo"
+
+
+def test_update_task_status_rejects_invalid_status(client):
+    ws_id = client.post("/workspaces", json={"name": "팀A"}).json()["id"]
+    task_id = client.post(
+        f"/workspaces/{ws_id}/tasks", json={"title": "기획서 작성"}
+    ).json()["id"]
+
+    resp = client.patch(
+        f"/workspaces/{ws_id}/tasks/{task_id}", json={"status": "in_progress"}
+    )
+    assert resp.status_code == 400
+
+
+def test_update_task_status_missing_task_404(client):
+    ws_id = client.post("/workspaces", json={"name": "팀A"}).json()["id"]
+    resp = client.patch(
+        f"/workspaces/{ws_id}/tasks/9999", json={"status": "done"}
+    )
+    assert resp.status_code == 404
+
+
+def test_update_task_status_requires_membership(client, db_session, test_user):
+    from contest_helper_core.models import Task, User, Workspace, WorkspaceMember
+
+    other = User(email="boss2@contest-helper.dev", name="사장2", interests=[], skills=[])
+    db_session.add(other)
+    db_session.commit()
+    ws = Workspace(name="외부팀", owner_id=other.id)
+    db_session.add(ws)
+    db_session.commit()
+    db_session.add(WorkspaceMember(workspace_id=ws.id, user_id=other.id, role="owner"))
+    task = Task(workspace_id=ws.id, title="남의 할 일")
+    db_session.add(task)
+    db_session.commit()
+
+    resp = client.patch(
+        f"/workspaces/{ws.id}/tasks/{task.id}", json={"status": "done"}
+    )
+    assert resp.status_code == 403
+
+
 def test_list_tasks_requires_membership(client, db_session, test_user):
     from contest_helper_core.models import User, Workspace, WorkspaceMember
 

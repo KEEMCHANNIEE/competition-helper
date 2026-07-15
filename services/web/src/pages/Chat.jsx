@@ -41,15 +41,116 @@ function AIIcon() {
   );
 }
 
-function renderMarkdown(text) {
+// LLM 출력의 태그가 그대로 주입되지 않도록 HTML 을 먼저 이스케이프한다.
+function escapeHtml(text) {
   return text
-    .replace(/^## (.+)$/gm, "<h2>$1</h2>")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+// 초소형 마크다운 렌더러. 문단(빈 줄)과 줄바꿈을 살려 텍스트 덩어리가 생기지 않게 한다.
+function renderMarkdown(text) {
+  const html = escapeHtml(text)
     .replace(/^### (.+)$/gm, "<h3>$1</h3>")
+    .replace(/^## (.+)$/gm, "<h2>$1</h2>")
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    .replace(/^- (.+)$/gm, "<li>$1</li>")
-    .replace(/(<li>.*<\/li>)/gs, "<ul>$1</ul>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/^---$/gm, "<hr/>")
-    .replace(/`([^`]+)`/g, "<code>$1</code>");
+    .replace(/^[-•] (.+)$/gm, "<li>$1</li>")
+    .replace(/(?:<li>.*<\/li>\n?)+/g, (m) => `<ul>${m}</ul>`);
+  return html
+    .split(/\n{2,}/)
+    .map((block) => {
+      const t = block.trim();
+      if (!t) return "";
+      if (/^<(h2|h3|ul|hr)/.test(t)) return t;
+      return `<p>${t.replace(/\n/g, "<br/>")}</p>`;
+    })
+    .join("");
+}
+
+// 서버 메시지 → 말풍선 목록. user/assistant 는 말풍선, recommend 는 공모전 카드,
+// proposal 은 승인 카드로 뽑고 나머지 내부 기록(topic/log/report)은 숨긴다.
+function toBubbles(serverMessages, keyPrefix = "") {
+  const bubbles = [];
+  let proposal = null;
+  for (const m of serverMessages) {
+    if (m.role === "proposal") {
+      try {
+        const p = JSON.parse(m.content);
+        if (!p.applied) proposal = p;
+      } catch { /* 파싱 실패 무시 */ }
+      continue;
+    }
+    if (m.role === "recommend") {
+      try {
+        const items = JSON.parse(m.content);
+        if (Array.isArray(items) && items.length) {
+          bubbles.push({
+            id: `${keyPrefix}${bubbles.length}`,
+            role: "assistant",
+            type: "cards",
+            items,
+          });
+        }
+      } catch { /* 파싱 실패 무시 */ }
+      continue;
+    }
+    if (m.role !== "user" && m.role !== "assistant") continue;
+    bubbles.push({
+      id: `${keyPrefix}${bubbles.length}`,
+      role: m.role,
+      content: m.content,
+      // "만들고"(완료 보고)만 매칭 — "만들까요?"(제안)나 "만들어 주세요"(안내)에
+      // 버튼이 뜨면 아직 없는 워크스페이스를 열라는 셈이 된다.
+      ...(m.role === "assistant" &&
+      (m.content.includes("Workspace") ||
+        m.content.includes("워크스페이스를 만들고") ||
+        m.content.includes("워크스페이스에 저장"))
+        ? { showWorkspaceButton: true }
+        : {}),
+    });
+  }
+  // 추천 기록(recommend)은 답변보다 먼저 저장되므로, 짧은 코멘트(텍스트)가 먼저
+  // 보이고 카드가 뒤따르도록 순서를 바꾼다.
+  for (let i = 0; i + 1 < bubbles.length; i++) {
+    if (bubbles[i].type === "cards" && bubbles[i + 1].role === "assistant" && !bubbles[i + 1].type) {
+      [bubbles[i], bubbles[i + 1]] = [bubbles[i + 1], bubbles[i]];
+    }
+  }
+  return { bubbles, proposal };
+}
+
+// 추천 결과 카드 목록. 카드를 누르면 그 공모전을 자세히 묻는 메시지를 보낸다(참여 유도).
+function RecommendCards({ items, onPick }) {
+  return (
+    <div className="chat-cards">
+      {items.map((c) => (
+        <button key={c.ordinal} className="chat-card" onClick={() => onPick?.(c)}>
+          <div className="chat-card-num">{c.ordinal}</div>
+          <div className="chat-card-body">
+            <div className="chat-card-title">{c.title}</div>
+            <div className="chat-card-meta">
+              {c.deadline && <span>마감 {c.deadline}</span>}
+              {c.first_prize_amount ? (
+                <span>1등 {Number(c.first_prize_amount).toLocaleString()}원</span>
+              ) : null}
+              {c.team_config && <span>{c.team_config}</span>}
+            </div>
+            {c.category?.length ? (
+              <div className="chat-card-tags">
+                {c.category.map((t) => (
+                  <span key={t} className="chat-card-tag">{t}</span>
+                ))}
+              </div>
+            ) : null}
+            <div className="chat-card-hint">누르면 자세히 알려드려요</div>
+          </div>
+        </button>
+      ))}
+    </div>
+  );
 }
 
 export default function Chat({ onGoToWorkspace, pendingChat, onPendingConsumed }) {
@@ -86,11 +187,7 @@ export default function Chat({ onGoToWorkspace, pendingChat, onPendingConsumed }
         id: `srv-${c.conversation_id}`,
         title: c.title,
         serverConvId: c.conversation_id,
-        messages: c.messages.map((m, i) => ({
-          id: `${c.conversation_id}-${i}`,
-          role: m.role,
-          content: m.content,
-        })),
+        messages: toBubbles(c.messages, `${c.conversation_id}-`).bubbles,
       }));
       setHistory(loaded);
       setActiveId(loaded[0].id); // 가장 최근 대화를 활성화
@@ -188,28 +285,7 @@ export default function Chat({ onGoToWorkspace, pendingChat, onPendingConsumed }
     setIsPending(false);
 
     if (state) {
-      // user/assistant 만 말풍선으로. role="proposal"(계획 변경 제안, JSON)은 승인 카드로 뽑아낸다.
-      // log/topic/report 등 내부 기록은 채팅에 노출하지 않는다.
-      const bubbles = [];
-      let proposal = null;
-      for (const m of state.messages) {
-        if (m.role === "proposal") {
-          try {
-            const p = JSON.parse(m.content);
-            if (!p.applied) proposal = p;
-          } catch { /* 파싱 실패 무시 */ }
-          continue;
-        }
-        if (m.role !== "user" && m.role !== "assistant") continue;
-        bubbles.push({
-          id: bubbles.length,
-          role: m.role,
-          content: m.content,
-          ...(m.role === "assistant" && m.content.includes("Workspace")
-            ? { showWorkspaceButton: true }
-            : {}),
-        });
-      }
+      const { bubbles, proposal } = toBubbles(state.messages);
       setHistory((prev) =>
         prev.map((h) =>
           h.id === chatLocalId ? { ...h, messages: bubbles, proposal } : h
@@ -349,6 +425,11 @@ export default function Chat({ onGoToWorkspace, pendingChat, onPendingConsumed }
                       <div className="chat-bubble assistant chat-loading">
                         <span>.</span><span>.</span><span>.</span>
                       </div>
+                    ) : msg.type === "cards" ? (
+                      <RecommendCards
+                        items={msg.items}
+                        onPick={(c) => handleSend(`${c.ordinal}번 공모전 더 자세히 알려줘`)}
+                      />
                     ) : (
                       <div
                         className="chat-bubble assistant"
