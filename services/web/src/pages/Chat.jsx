@@ -418,7 +418,7 @@ export default function Chat({ onGoToWorkspace, pendingChat, onPendingConsumed }
                   {msg.role === "assistant" && (
                     <div className="chat-ai-icon"><AIIcon /></div>
                   )}
-                  <div>
+                  <div className="chat-msg-content">
                     {msg.role === "user" ? (
                       <div className="chat-bubble user">{msg.content}</div>
                     ) : msg.isLoading ? (

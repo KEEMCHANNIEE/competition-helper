@@ -235,15 +235,28 @@
 
 .chat-ai-icon { flex-shrink: 0; margin-top: 2px; }
 
+/* 말풍선을 감싸는 열(내용 크기에 맞춰 폭이 정해지도록) */
+.chat-msg-content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  max-width: 82%;
+  min-width: 0;
+}
+.chat-msg-row.user .chat-msg-content { align-items: flex-end; }
+
 /* Bubble */
 .chat-bubble {
-  min-width: 80px;
-  max-width: 82%;
+  min-width: 40px;
+  max-width: 100%;
+  width: fit-content;
   padding: 12px 20px;
   border-radius: 12px;
   font-size: 14px;
   line-height: 1.7;
-  word-break: break-word;
+  /* 한글 단어는 중간에서 끊지 않고(공백에서만 줄바꿈), 아주 긴 URL 등만 강제로 끊는다 */
+  word-break: keep-all;
+  overflow-wrap: anywhere;
 }
 
 .chat-bubble.user {
@@ -297,7 +310,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  width: min(480px, 82%);
+  width: min(480px, 100%);
 }
 
 .chat-card {
