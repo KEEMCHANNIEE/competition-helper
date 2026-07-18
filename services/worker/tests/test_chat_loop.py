@@ -120,7 +120,11 @@ def test_handle_chat_job_marks_failed_on_agent_exception(
             .scalars()
             .all()
         )
-        assert msgs == []
+        # 실패해도 폴백 답변을 저장해야 한다 — assistant 메시지가 없으면 프론트
+        # 폴링이 pending 인 채로 타임아웃(45초 스피너)까지 조용히 기다린다.
+        assert len(msgs) == 1
+        assert msgs[0].role == "assistant"
+        assert "다시" in msgs[0].content
 
 
 def test_run_loop_dispatches_chat_payload(chat_session_factory, chat_seed, fake_redis):

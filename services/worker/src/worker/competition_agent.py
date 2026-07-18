@@ -23,6 +23,7 @@ from contest_helper_core.db import get_engine
 from contest_helper_core.models import Conversation, Message, Recommendation
 from contest_helper_core.schemas import MessageOut
 from worker.llm import GeminiClient, LLMClient
+from worker.search_filters import extract_keyword_and_filters
 from worker.style import STYLE_GUIDE
 from worker.team_fit import evaluate_team_fit
 
@@ -59,12 +60,25 @@ def _handle_study(
     callables: list[Callable] = [
         _make_compare_tool(tools),
         _make_get_competition_detail_tool(tools),
-        _make_search_tool(conversation_id, tools, session_factory),
+        _make_search_tool(conversation_id, history, tools, session_factory),
         _make_web_search_tool(tools),
     ]
     if workspace_id is not None:
         callables.append(_make_team_fit_tool(workspace_id, tools, session_factory))
         callables.append(_make_list_saved_tool(workspace_id, session_factory))
+
+    # 직전 추천/검색 목록의 순번↔id 매핑을 명시로 준다. 대화 기록 속 JSON(role=recommend)을
+    # LLM이 스스로 파싱하게 두면 "첫 번째 거 자세히" 같은 요청이 가끔 엉뚱한 id로 풀린다.
+    latest = load_latest_recommend_list(conversation_id, session_factory=session_factory)
+    recommend_block = ""
+    if latest:
+        listing = "\n".join(f"{e['ordinal']}. {e['title']} (id={e['id']})" for e in latest)
+        recommend_block = f"""
+
+[직전 추천/검색 목록 — 순번 ↔ 내부 id]
+{listing}
+사용자가 "첫 번째/1번"처럼 순번으로 가리키면 위 목록의 그 순번 항목을 뜻합니다.
+도구를 호출할 때는 반드시 이 id를 쓰고, id 는 어떤 형태로도 사용자에게 노출하지 마세요."""
 
     history_text = "\n".join(f"{m.role}: {m.content}" for m in history)
     prompt = f"""당신은 공모전 준비를 돕는 도우미입니다.
@@ -82,6 +96,7 @@ def _handle_study(
 3. 개념 설명처럼 도구 없이도 확실히 답할 수 있는 질문은 그냥 답하세요.
 
 {STYLE_GUIDE}
+{recommend_block}
 
 [대화 기록]
 {history_text}
@@ -131,6 +146,7 @@ def _make_get_competition_detail_tool(tools: dict) -> Callable:
 
 def _make_search_tool(
     conversation_id: int,
+    history: list[MessageOut],
     tools: dict,
     session_factory: Callable[[], Session] | None,
 ) -> Callable:
@@ -144,7 +160,16 @@ def _make_search_tool(
         Args:
             keyword: 검색 키워드(분야/주제 등). 없으면 비워도 됩니다.
         """
-        results = tools["search_competitions"](keyword=keyword, limit=5)
+        # 대화에서 파악된 구조화 조건(마감·상금·대상 등)을 함께 적용한다 —
+        # 키워드만으로 재검색하면 사용자가 앞서 말한 조건이 증발한다.
+        user_msgs = [m.content for m in history if m.role == "user"]
+        extracted_kw, filters = extract_keyword_and_filters(user_msgs)
+        results = tools["search_competitions"](
+            keyword=keyword or extracted_kw, filters=filters, limit=5
+        )
+        if not results:
+            # 필터가 과하게 걸러냈을 수 있으니 키워드만으로 한 번 더 시도한다.
+            results = tools["search_competitions"](keyword=keyword, limit=5)
         if not results:
             return "조건에 맞는 공모전을 찾지 못했어요."
         entries = save_recommend_list(conversation_id, results, session_factory=session_factory)

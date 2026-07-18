@@ -237,7 +237,7 @@ def test_answer_offers_search_tool_and_persists_recommend_list(
     session_factory, conversation_without_workspace
 ):
     tools = {
-        "search_competitions": lambda keyword=None, limit=5: [
+        "search_competitions": lambda keyword=None, limit=5, **kw: [
             _detail(1, "공모전A"), _detail(2, "공모전B"),
         ]
     }

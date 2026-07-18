@@ -205,6 +205,18 @@ def handle_chat_job(
             job = _get_or_create_job(session, payload)
             job.status = JobStatus.failed.value
             job.error = str(exc)[:1000]
+            # 폴백 답변을 반드시 저장한다 — assistant 메시지가 없으면 프론트 폴링이
+            # pending 인 채로 타임아웃(45초 스피너)까지 조용히 기다리게 된다.
+            session.add(
+                Message(
+                    conversation_id=payload.conversation_id,
+                    role="assistant",
+                    content=(
+                        "죄송해요, 지금 답변을 만들지 못했어요. "
+                        "잠시 후 같은 내용으로 다시 한번 말씀해 주시겠어요?"
+                    ),
+                )
+            )
             session.commit()
         return JobStatus.failed
 

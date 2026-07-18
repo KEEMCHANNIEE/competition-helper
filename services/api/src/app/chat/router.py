@@ -181,7 +181,11 @@ def get_chat_state(
     ).all()
 
     messages = [MessageOut(role=m.role, content=m.content) for m in rows]
-    pending = bool(rows) and rows[-1].role == "user"
+    # pending 판정은 실제 대화(user/assistant) 기준. recommend/log 같은 내부 기록이
+    # user 메시지 뒤·assistant 답변 앞에 저장되는 순간 폴링이 "답변 완료"로 오인해
+    # 텍스트 없는 카드만 그리는 레이스를 막는다.
+    convo_rows = [m for m in rows if m.role in ("user", "assistant")]
+    pending = bool(convo_rows) and convo_rows[-1].role == "user"
 
     return ChatStateOut(
         conversation_id=conv.id,

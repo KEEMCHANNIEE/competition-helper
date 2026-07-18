@@ -60,9 +60,10 @@ def test_handle_recommend_never_leaks_pk_and_saves_recommend_list(
     monkeypatch, session_factory, conversation_id
 ):
     monkeypatch.setattr(agent, "GeminiClient", lambda: _CannedLLM("추천 답변입니다."))
-    monkeypatch.setattr(agent, "_extract_search_keyword", lambda history: "마케팅")
     monkeypatch.setattr(
-        agent, "_extract_search_filters", lambda history, **kw: CompetitionSearchFilters()
+        agent,
+        "extract_keyword_and_filters",
+        lambda user_msgs, **kw: ("마케팅", CompetitionSearchFilters()),
     )
     monkeypatch.setattr(
         agent, "semantic_search", lambda keyword, k: [_detail(101, "공모전A"), _detail(202, "공모전B")]

@@ -75,6 +75,7 @@ class CompetitionSearchFilters(BaseModel):
     participation_type: str | None = None  # "individual" | "team"
     is_career_benefit: bool | None = None
     deadline_before: date | None = None
+    deadline_after: date | None = None  # 이 날짜 이후 마감만(= 준비 기간 확보, "마감 여유 있는 거")
 
 
 class CompetitionDetailOut(BaseModel):
@@ -185,6 +186,7 @@ def search_competitions(
     before: date | None = None,
     participation: str | None = None,
     filters: CompetitionSearchFilters | None = None,
+    exclude_ids: list[int] | None = None,
     limit: int = 20,
 ) -> list[CompetitionOut]:
     """키워드/마감/구조화 필터 조건으로 공모전을 검색한다.
@@ -195,6 +197,7 @@ def search_competitions(
         before: 이 날짜 이전 마감만(선택). ``filters.deadline_before`` 와 함께 쓰이면 더 이른 쪽이 적용된다.
         participation: "individual"/"team" (선택). ``filters.participation_type`` 과 함께 쓰이면 이 값이 우선한다.
         filters: 자연어 요청에서 추출한 구조화 필터(분야/대상/최소상금/취업연계/마감 등).
+        exclude_ids: 결과에서 제외할 공모전 id 목록("비슷한 다른 거"처럼 직전 추천 제외용).
         limit: 최대 결과 수.
 
     Returns:
@@ -222,6 +225,15 @@ def search_competitions(
     if effective_before:
         conditions.append("end_date < :before")
         params["before"] = effective_before
+
+    if filters and filters.deadline_after:
+        conditions.append("end_date > :after")
+        params["after"] = filters.deadline_after
+
+    if exclude_ids:
+        # 튜플 바인딩 대신 배열 비교(= ANY 부정)를 써서 개수와 무관하게 파라미터 1개로 처리.
+        conditions.append("NOT (id = ANY(:exclude_ids))")
+        params["exclude_ids"] = list(exclude_ids)
 
     if filters and filters.category:
         # category 컬럼은 진짜 배열이 아니라 JSON 문자열(text)로 저장되어 있어 ILIKE OR로 매칭한다.
