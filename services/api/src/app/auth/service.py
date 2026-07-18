@@ -5,12 +5,11 @@
 
 from __future__ import annotations
 
+from contest_helper_core.config import get_settings
+from contest_helper_core.models import User
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-
-from contest_helper_core.config import get_settings
-from contest_helper_core.models import User
 
 # 세션 쿠키 이름 및 만료(초). deps.get_current_user 와 공유.
 SESSION_COOKIE = "contest_helper_session"

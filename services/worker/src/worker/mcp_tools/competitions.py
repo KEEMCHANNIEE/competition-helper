@@ -22,11 +22,10 @@ import json
 from datetime import date
 from typing import Any
 
-from pydantic import BaseModel
-from sqlalchemy import text
-
 from contest_helper_core.competition_db import competition_session_factory
 from contest_helper_core.schemas import CompetitionOut
+from pydantic import BaseModel
+from sqlalchemy import text
 
 # contests.category/target 에 실제로 쓰이는 값(2026-07-09 기준 데이터 조사). 필터 추출
 # 프롬프트에서 이 목록을 후보로 제시해, LLM이 DB에 없는 비슷한 말을 지어내는 걸 막는다.

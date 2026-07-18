@@ -14,12 +14,12 @@ from __future__ import annotations
 
 import json
 
-from sqlalchemy import select, text
-from sqlalchemy.orm import sessionmaker
-
 from contest_helper_core.competition_db import competition_session_factory
 from contest_helper_core.db import get_engine
 from contest_helper_core.models import Embedding
+from sqlalchemy import select, text
+from sqlalchemy.orm import sessionmaker
+
 from worker.llm import GeminiClient
 
 

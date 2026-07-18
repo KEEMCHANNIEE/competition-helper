@@ -9,10 +9,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from sqlalchemy.orm import Session
-
 from contest_helper_core.models import AgentJob
 from contest_helper_core.schemas import RecommendJobPayload
+from sqlalchemy.orm import Session
 
 if TYPE_CHECKING:
     from redis import Redis
@@ -23,7 +22,7 @@ RECOMMEND_QUEUE_KEY = "contest-helper:jobs:recommend"
 
 def enqueue_recommend(
     db: Session,
-    redis: "Redis",
+    redis: Redis,
     *,
     user_id: int,
     limit: int = 5,

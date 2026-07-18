@@ -24,8 +24,14 @@ jobs:
     strategy:
       fail-fast: false # 한 서비스가 실패해도 다른 서비스 검사는 계속
       matrix:
-        # uv workspace 의 패키지 이름. 둘을 각각 검사한다.
-        service: [contest-helper-api, contest-helper-worker]
+        # uv workspace 의 패키지 이름 + 테스트 경로. 둘을 각각 검사한다.
+        # path 를 pytest 에 명시하지 않으면 rootdir 판별이 흔들려 api/worker 양쪽
+        # tests/conftest.py 이름 충돌(ImportPathMismatchError)이 난다.
+        include:
+          - service: contest-helper-api
+            path: services/api
+          - service: contest-helper-worker
+            path: services/worker
     steps:
       - uses: actions/checkout@v4
 
@@ -39,9 +45,11 @@ jobs:
         run: uv python install 3.12
 
       # 개발 의존성 포함 설치(테스트/린트 도구 필요).
-      # 워크스페이스 루트에서 한 번에 동기화하면 contest-helper-core 도 함께 풀린다.
+      # --all-packages 필수: 워크스페이스 루트 프로젝트 자체엔 의존성이 없어서,
+      # 이거 없이 `uv sync --dev` 만 돌리면 api/worker 의 dev 그룹(ruff, pytest 등)이
+      # 설치되지 않고 "Checked" 로 조용히 스킵된다(그 뒤 `uv run ruff` 가 program not found).
       - name: Sync dependencies
-        run: uv sync --dev
+        run: uv sync --dev --all-packages
 
       # ruff 린트 — 레포 전체 검사(루트 pyproject 의 ruff 설정 사용).
       - name: Lint (ruff)
@@ -49,7 +57,7 @@ jobs:
 
       # 해당 서비스의 테스트만 실행.
       - name: Test (pytest)
-        run: uv run --package ${{ matrix.service }} pytest
+        run: uv run --package ${{ matrix.service }} pytest ${{ matrix.path }}/tests
 
   # ---------------------------------------------------------------------------
   # 프론트엔드(web) 검사
@@ -68,6 +76,18 @@ jobs:
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
             echo "services/web/package.json 없음 → web 잡 스킵"
+          fi
+
+      - name: Check test script exists
+        id: test_check
+        if: steps.web_check.outputs.exists == 'true'
+        working-directory: services/web
+        run: |
+          if grep -q '"test":' package.json; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "package.json 에 \"test\" 스크립트 없음 → vitest 단계 스킵(프론트엔드 테스트 아직 미작성)"
           fi
 
       - name: Set up Node 20
@@ -89,8 +109,7 @@ jobs:
         run: npm run build
 
       - name: Test (vitest)
-        if: steps.web_check.outputs.exists == 'true'
+        if: steps.web_check.outputs.exists == 'true' && steps.test_check.outputs.exists == 'true'
         working-directory: services/web
-        # --run: watch 모드 없이 1회 실행. 테스트 스크립트가 없으면 실패하지 않도록 || true 가능하나
-        # 여기선 명시적으로 vitest 실행(스크립트가 없다면 package.json 에 추가할 것).
+        # --run: watch 모드 없이 1회 실행.
         run: npm run test -- --run

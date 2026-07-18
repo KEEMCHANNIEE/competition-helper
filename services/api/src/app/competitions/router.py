@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
+from contest_helper_core.schemas import CompetitionOut
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import SQLAlchemyError
-
-from contest_helper_core.schemas import CompetitionOut
 
 from app.competitions.repository import CompetitionRepository
 from app.deps import get_competition_repo

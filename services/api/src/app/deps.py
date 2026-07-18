@@ -10,13 +10,12 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
 import redis as redis_lib
-from fastapi import Depends, HTTPException, Request, status
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
 from contest_helper_core.config import get_settings
 from contest_helper_core.db import get_session
 from contest_helper_core.models import User
+from fastapi import Depends, HTTPException, Request, status
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.auth.service import SESSION_COOKIE, read_session_token
 from app.competitions.repository import (
@@ -33,7 +32,7 @@ def get_db() -> Iterator[Session]:
     yield from get_session()
 
 
-def get_redis() -> "Redis":
+def get_redis() -> Redis:
     """동기 redis-py 클라이언트. 큐 계약과 동일하게 redis_url 사용."""
     return redis_lib.from_url(get_settings().redis_url)
 
@@ -48,6 +47,10 @@ def get_current_user(
     db: Session = Depends(get_db),
 ) -> User:
     """서명된 세션 쿠키에서 user_id 를 복원해 User 를 반환. 없으면 401."""
+    if get_settings().dev_bypass_auth:
+        from app.auth.service import upsert_user
+        return upsert_user(db, email="dev@localhost", name="Dev User")
+
     token = request.cookies.get(SESSION_COOKIE)
     user_id = read_session_token(token) if token else None
     if user_id is None:

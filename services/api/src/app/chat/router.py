@@ -10,13 +10,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from contest_helper_core.models import Conversation, Message, User
+from contest_helper_core.schemas import ChatStateOut, MessageOut
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-
-from contest_helper_core.models import Conversation, Message, User
-from contest_helper_core.schemas import ChatStateOut, MessageOut
 
 from app.chat.queue import enqueue_chat
 from app.deps import get_current_user, get_db, get_redis
@@ -63,7 +62,7 @@ def create_chat_turn(
     payload: ChatRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    redis: "Redis" = Depends(get_redis),
+    redis: Redis = Depends(get_redis),
 ) -> ChatAccepted:
     """대화 한 턴 접수. conversation_id 없으면 새 대화를 만든다."""
     if payload.conversation_id is None:

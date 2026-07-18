@@ -40,9 +40,6 @@ import json
 import re
 from collections.abc import Callable
 
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session, sessionmaker
-
 from contest_helper_core.db import get_engine
 from contest_helper_core.models import (
     Conversation,
@@ -58,6 +55,9 @@ from contest_helper_core.schemas import (
     RecommendJobPayload,
     TaskIn,
 )
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, sessionmaker
+
 from worker import competition_agent
 from worker.llm import GeminiClient, LLMClient
 from worker.mcp_tools.competitions import (
@@ -117,7 +117,10 @@ _INTENT_KEYWORDS: dict[str, list[str]] = {
     # 걸려버려서, 새 공모전 탐색 의미가 뚜렷한 표현으로만 좁힌다.
     "recommend": ["추천", "공모전 찾아줘", "공모전 알려줘", "뭐가 있어"],
     # teamstatus 는 팀 전체(팀원별) 실행 현황(S-02 STEP03). progress(개인)보다 먼저 검사.
-    "teamstatus": ["팀 전체 진행", "팀 전체 현황", "팀 진행 현황", "전체 진행 현황", "팀 현황", "팀원별 현황", "누가 뭐 했", "누가 무엇을"],
+    "teamstatus": [
+        "팀 전체 진행", "팀 전체 현황", "팀 진행 현황", "전체 진행 현황",
+        "팀 현황", "팀원별 현황", "누가 뭐 했", "누가 무엇을",
+    ],
     # riskcheck 는 팀장이 현황+다음 주 계획의 리스크 점검을 요청(S-03 STEP02).
     "riskcheck": ["현황 어때", "계획 괜찮", "이대로 괜찮", "다음 주 계획", "리스크 점검", "점검해줘", "괜찮을까"],
     "progress": ["진행률", "진행 상황", "진행상황", "어디까지"],

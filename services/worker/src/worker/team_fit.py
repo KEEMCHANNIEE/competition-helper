@@ -12,11 +12,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from contest_helper_core.db import get_engine
+from contest_helper_core.models import User, Workspace, WorkspaceMember
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from contest_helper_core.db import get_engine
-from contest_helper_core.models import User, Workspace, WorkspaceMember
 from worker.llm import GeminiClient, LLMClient
 
 
@@ -135,7 +135,10 @@ def _fallback_assessment(members: list[dict], competition) -> str:
     names = ", ".join(m["name"] for m in members)
     if competition is None:
         return f"팀원({names})의 관심사·스킬은 확인했지만, 아직 연결된 공모전이 없어서 적합도를 판단하긴 어려워요."
-    return f"팀원({names})이 {competition.title} 공모전을 준비하고 있어요. 지금은 상세 평가를 만들지 못했어요, 잠시 후 다시 물어봐 주세요."
+    return (
+        f"팀원({names})이 {competition.title} 공모전을 준비하고 있어요. "
+        "지금은 상세 평가를 만들지 못했어요, 잠시 후 다시 물어봐 주세요."
+    )
 
 
 def _default_session_factory() -> sessionmaker[Session]:

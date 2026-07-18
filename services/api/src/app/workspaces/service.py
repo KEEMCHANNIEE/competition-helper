@@ -7,10 +7,6 @@ from __future__ import annotations
 
 import json
 
-from fastapi import HTTPException, status
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
-
 from contest_helper_core.models import (
     Conversation,
     Message,
@@ -21,6 +17,9 @@ from contest_helper_core.models import (
     WorkspaceMember,
 )
 from contest_helper_core.schemas import TaskIn
+from fastapi import HTTPException, status
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 
 def get_workspace_or_404(db: Session, workspace_id: int) -> Workspace:
@@ -157,7 +156,7 @@ def generate_weekly_report(db: Session, *, ws: Workspace) -> Message:
         "total": total,
     }
     member_data: list[dict] = []
-    for m, u in list_members(db, ws.id):
+    for _m, u in list_members(db, ws.id):
         mine = [t for t in tasks if t.assignee_id == u.id]
         md = sum(1 for t in mine if t.status == "done")
         member_data.append(

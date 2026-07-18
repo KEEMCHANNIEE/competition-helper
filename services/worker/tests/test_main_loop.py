@@ -5,11 +5,10 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
-
 from contest_helper_core.models import AgentJob, Recommendation
 from contest_helper_core.schemas import JobStatus, RecommendationOut, RecommendJobPayload
+from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
 from worker import main
 from worker.main import QUEUE_KEY, handle_job, run_loop
 

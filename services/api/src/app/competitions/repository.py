@@ -9,10 +9,9 @@ from __future__ import annotations
 import json
 from typing import Protocol
 
-from sqlalchemy import text
-
 from contest_helper_core.competition_db import competition_session_factory
 from contest_helper_core.schemas import CompetitionOut
+from sqlalchemy import text
 
 # 실제 소스 데이터의 status 값은 'ACTIVE'/'CLOSED' 이다(한글 '진행중'/'마감' 도 병행 허용).
 _OPEN_STATUSES = "('진행중', 'ACTIVE')"

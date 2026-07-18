@@ -16,9 +16,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
-
 from contest_helper_core.db import get_engine
 from contest_helper_core.models import (
     Conversation,
@@ -30,6 +27,9 @@ from contest_helper_core.models import (
     WorkspaceProgress,
 )
 from contest_helper_core.schemas import ProgressOut
+from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
+
 from worker.llm import GeminiClient, LLMClient
 from worker.mcp_tools.registry import build_registry
 
@@ -161,7 +161,8 @@ def _generate_comment(
     study_summary: str,
     llm: LLMClient | None,
 ) -> str:
-    deadline_line = f"마감: {competition.deadline}" if competition and competition.deadline else "마감 정보 없음"
+    has_deadline = competition and competition.deadline
+    deadline_line = f"마감: {competition.deadline}" if has_deadline else "마감 정보 없음"
     prompt = f"""당신은 공모전 준비 워크스페이스의 진행 상황을 평가하는 코치입니다.
 
 - 할 일 진행률: {task_done}/{task_total} 건 완료 ({percent}%)
@@ -191,7 +192,7 @@ def _fallback_comment(percent: int, task_total: int, competition) -> str:
 
         days_left = (deadline - date.today()).days
         if days_left <= 7 and percent < 50:
-            return f"마감까지 {max(days_left, 0)}일 남았는데 진행률이 {percent}%예요. 서둘러야 해요!"
+            return f"마감까지 {max(days_left, 0)}일 남았는데 진행률이 {percent}%예요. 서둘러야 해요!"  # noqa: E501
 
     if percent >= 80:
         return f"진행률 {percent}%, 거의 다 왔어요!"

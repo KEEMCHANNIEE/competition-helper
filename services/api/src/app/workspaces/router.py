@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from contest_helper_core.models import User, Workspace
+from contest_helper_core.schemas import TaskIn, TaskOut
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
-
-from contest_helper_core.models import User, Workspace
-from contest_helper_core.schemas import TaskIn, TaskOut
 
 from app.deps import get_current_user, get_db
 from app.workspaces import service
