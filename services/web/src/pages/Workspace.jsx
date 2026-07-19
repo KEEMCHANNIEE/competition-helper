@@ -223,7 +223,22 @@ export default function Workspace({ onGoToChat, onStartTaskChat, active = true }
         const memJson = memRes ? await memRes.json() : [];
         const memberMap = Object.fromEntries(memJson.map((m) => [m.user_id, m.name]));
         if (taskRes) setTasks(normalizeTasks(await taskRes.json(), memberMap));
-        if (compRes) setContest(normalizeContest(await compRes.json()));
+        if (compRes) {
+          const c = normalizeContest(await compRes.json());
+          setContest(c);
+          // 공식 일정(type: "contest")은 목데이터 대신 연결된 공모전의 실제
+          // 접수 기간으로 만든다. 팀 일정(type: "team")은 백엔드 모델이 없어
+          // 목업/수동 추가를 유지한다.
+          setSchedules((prev) => [
+            ...prev.filter((s) => s.type !== "contest"),
+            ...(c.start_date
+              ? [{ id: "official-start", title: "접수 시작 (공식)", date: c.start_date, type: "contest" }]
+              : []),
+            ...(c.end_date
+              ? [{ id: "official-end", title: "접수 마감 (공식)", date: c.end_date, type: "contest" }]
+              : []),
+          ]);
+        }
         setMembers(memJson);
         if (meRes) setMe(await meRes.json());
         if (logRes) setLogs(await logRes.json());

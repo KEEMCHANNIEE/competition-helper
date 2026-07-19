@@ -499,6 +499,166 @@ class _BoomLLM:
         raise RuntimeError("LLM down")
 
 
+class _FakeToolLLM:
+    """지정한 이름의 도구를 찾아 실행하는 가짜 오케스트레이터 LLM.
+
+    chat() 의 도구 우선 경로(_chat_with_tools)가 핸들러를 도구로 올바르게
+    노출·실행하는지 검증한다. 핸들러 내부의 generate() 호출엔 generate_text 를 준다.
+    """
+
+    def __init__(self, call: str, kwargs: dict | None = None, generate_text: str = "요약: 작업\n키워드: #작업") -> None:
+        self.call = call
+        self.kwargs = kwargs or {}
+        self.generate_text = generate_text
+
+    def generate(self, prompt: str) -> str:  # noqa: ARG002
+        return self.generate_text
+
+    def generate_with_tools(self, prompt: str, tools: list) -> str:  # noqa: ARG002
+        fn = next(t for t in tools if t.__name__ == self.call)
+        return fn(**self.kwargs)
+
+
+def test_wants_log_save_guard():
+    """작업 보고는 저장 요청이 아니고, 명시 요청·저장 제안 수락은 저장 요청이다."""
+    assert not agent._wants_log_save("오늘 데이터셋 3개 정리했어", [])
+    assert agent._wants_log_save("오늘 작업한 거 저장해줘", [])
+    assert agent._wants_log_save("지난번에 저장한 거랑 합쳐줘", [])
+    offer = [MessageOut(role="assistant", content="오늘 작업한 내용을 실행 로그로 저장해 드릴까요?")]
+    assert agent._wants_log_save("응", offer)
+    assert not agent._wants_log_save("아니 됐어", offer)
+
+
+def test_save_log_tool_refuses_mere_work_report(session_factory, workspace_conv):
+    """모델이 작업 보고에 save_work_log 를 불러도 가드가 저장을 막는다."""
+    conv_id = workspace_conv["conversation_id"]
+    _add_messages(session_factory, conv_id, ("user", "오늘 상권 데이터 시각화 초안 만들어봤어"))
+    llm = _FakeToolLLM("save_work_log")
+    # 가드가 [도구 미실행] 힌트를 반환 → 기록되지 않아 그 텍스트가 그대로 응답이 됨
+    reply = agent.chat(
+        conv_id, workspace_conv["owner_id"], session_factory=session_factory, llm=llm
+    )
+    assert "[도구 미실행]" in reply  # FakeLLM 은 도구 반환값을 그대로 돌려주므로
+    with session_factory() as session:
+        assert session.query(Message).filter_by(conversation_id=conv_id, role="log").count() == 0
+
+
+def test_format_detail_includes_all_collected_fields():
+    """'자세히'는 우리가 모은 모든 정보(주최·키워드·기간·상금·자격·설명·링크)를 보여준다."""
+    from datetime import date as date_cls
+
+    d = CompetitionDetailOut(
+        id=1,
+        title="국가데이터 활용대회",
+        organizer="국가데이터처",
+        host_type="정부기관",
+        category=["학술/논문"],
+        keywords=["데이터", "AI"],
+        target=["대학생", "일반인"],
+        start_date=date_cls(2026, 7, 1),
+        deadline=date_cls(2026, 8, 9),
+        total_prize_amount=10_000_000,
+        first_prize_amount=5_000_000,
+        participation_type="team",
+        team_config="3인 이하",
+        is_career_benefit=True,
+        requirements=["국내 거주자"],
+        evaluation_criteria=["데이터 활용도 40%", "창의성 30%"],
+        description="국가 데이터 활용 아이디어를 발굴하는 대회입니다.",
+        url="https://example.com",
+        status="진행중",
+    )
+    from worker import competition_agent
+
+    out = competition_agent._format_detail(d)
+    for expected in (
+        "국가데이터처", "정부기관", "학술/논문", "데이터, AI", "대학생, 일반인",
+        "2026-07-01 ~ 2026-08-09", "총상금 10,000,000원", "1등 상금 5,000,000원",
+        "3인 이하", "취업·인턴 연계", "국내 거주자", "데이터 활용도 40%",
+        "아이디어를 발굴", "https://example.com", "진행중",
+    ):
+        assert expected in out, f"누락: {expected}"
+
+
+def test_chat_tool_path_show_details_relays_verbatim(monkeypatch, session_factory, workspace_conv):
+    """카드 클릭("N번 더 자세히")이 show_competition_details 로 흘러 전체 정보가 그대로 전달된다."""
+    conv_id = workspace_conv["conversation_id"]
+    _add_messages(
+        session_factory, conv_id,
+        ("recommend", json.dumps([{"ordinal": 1, "id": 11, "title": "국가데이터 활용대회"}], ensure_ascii=False)),
+        ("user", "1번 공모전 더 자세히 알려줘"),
+    )
+    detail = CompetitionDetailOut(
+        id=11, title="국가데이터 활용대회", organizer="국가데이터처",
+        requirements=["국내 거주자"], evaluation_criteria=["창의성 30%"],
+    )
+    real_registry = agent.build_registry()
+    monkeypatch.setattr(
+        agent, "build_registry",
+        lambda: {**real_registry, "get_competition_detail": lambda cid: detail if cid == 11 else None},
+    )
+    reply = agent.chat(
+        conv_id, workspace_conv["owner_id"],
+        session_factory=session_factory,
+        llm=_FakeToolLLM("show_competition_details", kwargs={"competition_id": 11}),
+    )
+    assert "국가데이터처" in reply and "국내 거주자" in reply and "창의성 30%" in reply
+
+
+def test_chat_tool_path_routes_save_log(session_factory, workspace_conv):
+    """도구 우선 경로: 모델이 save_work_log 도구를 고르면 실행 로그가 저장된다."""
+    conv_id = workspace_conv["conversation_id"]
+    _add_messages(
+        session_factory, conv_id,
+        ("user", "오늘 트렌드 데이터 정리했어"),
+        ("assistant", "좋아요"),
+        ("user", "오늘 작업한 거 저장해줘"),
+    )
+    reply = agent.chat(
+        conv_id, workspace_conv["owner_id"],
+        session_factory=session_factory, llm=_FakeToolLLM("save_work_log"),
+    )
+    assert "저장했어요" in reply
+    with session_factory() as session:
+        assert session.query(Message).filter_by(conversation_id=conv_id, role="log").count() == 1
+
+
+def test_chat_tool_path_routes_update_workspace(session_factory, workspace_conv):
+    """어제 버그 형태: 워크스페이스가 있는 상태의 "연결해줘"가 update_workspace 로 흐른다."""
+    conv_id = workspace_conv["conversation_id"]
+    _add_messages(
+        session_factory, conv_id,
+        ("recommend", json.dumps([{"ordinal": 1, "id": 11, "title": "FUTURE FINANCE 챌린지"}], ensure_ascii=False)),
+        ("user", "1번 공모전으로 바꿔 연결해줘"),
+    )
+    reply = agent.chat(
+        conv_id, workspace_conv["owner_id"],
+        session_factory=session_factory,
+        llm=_FakeToolLLM("update_workspace", generate_text="없음"),
+    )
+    assert "FUTURE FINANCE 챌린지" in reply
+    with session_factory() as session:
+        assert session.get(Workspace, workspace_conv["workspace_id"]).contest_id == 11
+
+
+def test_chat_tool_path_routes_complete_task(session_factory, workspace_conv):
+    conv_id = workspace_conv["conversation_id"]
+    with session_factory() as session:
+        session.add(
+            Task(workspace_id=workspace_conv["workspace_id"], title="트렌드 데이터 수집", status="todo")
+        )
+        session.commit()
+    _add_messages(session_factory, conv_id, ("user", "트렌드 데이터 수집 끝냈어, 완료 처리해줘"))
+    reply = agent.chat(
+        conv_id, workspace_conv["owner_id"],
+        session_factory=session_factory,
+        llm=_FakeToolLLM("complete_task", kwargs={"task_title": "트렌드 데이터 수집"}),
+    )
+    assert "완료 처리했어요" in reply
+    with session_factory() as session:
+        assert session.query(Task).first().status == "done"
+
+
 def test_new_chat_adopts_member_workspace(session_factory, workspace_conv):
     """팀원이 (할 일 클릭이 아니라) 새 채팅으로 시작해도 저장이 거절되지 않는다.
 
