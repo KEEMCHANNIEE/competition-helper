@@ -20,6 +20,7 @@ services/web/dist/
 .terraform/
 *.tfstate
 *.tfstate.*
+*.tfvars
 
 # misc
 .DS_Store

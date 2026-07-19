@@ -17,17 +17,21 @@ metadata:
   name: {{ include "contest-helper.fullname" . }}
   labels:
     {{- include "contest-helper.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
   annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    {{- with .Values.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: conmate-xyz-tls
   rules:
     - host: {{ .Values.ingress.host | quote }}
       http:
         paths:
-          # /api 로 시작하는 요청은 api 서비스로.
           - path: /api
             pathType: Prefix
             backend:
@@ -35,7 +39,6 @@ spec:
                 name: {{ include "contest-helper.fullname" . }}-api
                 port:
                   number: {{ .Values.service.api.port }}
-          # 그 외 모든 요청(/)은 web(SPA)으로.
           - path: /
             pathType: Prefix
             backend:
