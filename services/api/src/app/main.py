@@ -29,11 +29,11 @@ def create_app() -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    app.include_router(auth_router)
-    app.include_router(competitions_router)
-    app.include_router(recommend_router)
-    app.include_router(workspaces_router)
-    app.include_router(chat_router)
+    app.include_router(auth_router,         prefix="/api")
+    app.include_router(competitions_router, prefix="/api")
+    app.include_router(recommend_router,    prefix="/api")
+    app.include_router(workspaces_router,   prefix="/api")
+    app.include_router(chat_router,         prefix="/api")
     return app
 
 

@@ -69,8 +69,9 @@ config:
   REDIS_URL: "redis://{{ .Release.Name }}-redis:6379/0"
   VERTEX_LOCATION: "us-central1"
   GOOGLE_CLOUD_PROJECT: ""            # Vertex 경로 쓸 때 채움(프로젝트 ID 는 비밀 아님)
-  GOOGLE_OAUTH_REDIRECT_URI: "http://localhost/auth/google/callback"
+  GOOGLE_OAUTH_REDIRECT_URI: "https://conmate.xyz/api/auth/google/callback"
   LANGFUSE_HOST: ""
+  FRONTEND_URL: "https://conmate.xyz"
 
 # -----------------------------------------------------------------------------
 # 비밀 환경변수 (Secret 으로 주입) — ★ 여기에 실제 값 쓰지 말 것 ★
@@ -117,6 +118,6 @@ service:
 ingress:
   enabled: true
   className: "nginx"   # ingress-nginx 컨트롤러 사용 가정(kind 에서도 설치 가능)
-  host: "contest-helper.local" # /etc/hosts 에 127.0.0.1 contest-helper.local 추가해 테스트
+  host: "conmate.xyz" # /etc/hosts 에 127.0.0.1 contest-helper.local 추가해 테스트
   # 경로 규칙: /api → api 서비스, / → web 서비스
   annotations: {}
