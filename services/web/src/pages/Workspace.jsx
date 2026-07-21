@@ -142,6 +142,10 @@ export default function Workspace({ onGoToChat, onStartTaskChat, active = true }
   const [members, setMembers] = useState([]);
   const [me, setMe] = useState(null);
 
+  // 워크스페이스가 여러 개일 때 전환용. null 이면 최신 워크스페이스를 보여준다.
+  const [wsList, setWsList] = useState([]);
+  const [selectedWsId, setSelectedWsId] = useState(null);
+
   // 실행 로그(S-02 STEP02). 워크스페이스에 연결된 대화의 role="log" 요약들.
   const [logs, setLogs] = useState([]);
   // 주간 리포트(S-03 STEP01). role="report" 로 저장된 집계 리포트들.
@@ -201,7 +205,9 @@ export default function Workspace({ onGoToChat, onStartTaskChat, active = true }
         const workspaces = await wsRes.json();
         if (!workspaces.length) return; // 아직 워크스페이스 없음 → mock 유지
 
-        const ws = workspaces[0]; // 최신 워크스페이스
+        setWsList(workspaces);
+        // 사용자가 고른 워크스페이스가 있으면 그걸, 없으면 최신 것을 보여준다.
+        const ws = workspaces.find((w) => w.id === selectedWsId) || workspaces[0];
         const [taskRes, compRes, memRes, meRes, logRes, repRes] = await Promise.all([
           apiFetch(`/workspaces/${ws.id}/tasks`),
           ws.contest_id ? apiFetch(`/competitions/${ws.contest_id}`) : Promise.resolve(null),
@@ -217,7 +223,22 @@ export default function Workspace({ onGoToChat, onStartTaskChat, active = true }
         const memJson = memRes ? await memRes.json() : [];
         const memberMap = Object.fromEntries(memJson.map((m) => [m.user_id, m.name]));
         if (taskRes) setTasks(normalizeTasks(await taskRes.json(), memberMap));
-        if (compRes) setContest(normalizeContest(await compRes.json()));
+        if (compRes) {
+          const c = normalizeContest(await compRes.json());
+          setContest(c);
+          // 공식 일정(type: "contest")은 목데이터 대신 연결된 공모전의 실제
+          // 접수 기간으로 만든다. 팀 일정(type: "team")은 백엔드 모델이 없어
+          // 목업/수동 추가를 유지한다.
+          setSchedules((prev) => [
+            ...prev.filter((s) => s.type !== "contest"),
+            ...(c.start_date
+              ? [{ id: "official-start", title: "접수 시작 (공식)", date: c.start_date, type: "contest" }]
+              : []),
+            ...(c.end_date
+              ? [{ id: "official-end", title: "접수 마감 (공식)", date: c.end_date, type: "contest" }]
+              : []),
+          ]);
+        }
         setMembers(memJson);
         if (meRes) setMe(await meRes.json());
         if (logRes) setLogs(await logRes.json());
@@ -231,7 +252,7 @@ export default function Workspace({ onGoToChat, onStartTaskChat, active = true }
     return () => {
       cancelled = true;
     };
-  }, [active]);
+  }, [active, selectedWsId]);
 
   const completedCount = tasks.filter((t) => t.completed).length;
   const progress = tasks.length > 0 ? Math.round((completedCount / tasks.length) * 100) : 0;
@@ -328,6 +349,22 @@ export default function Workspace({ onGoToChat, onStartTaskChat, active = true }
           }}
         >
           <span>👥 현재 시점: <b>{me?.name || "-"}</b></span>
+          {wsList.length > 1 && (
+            <>
+              <span style={{ color: "#6B7280" }}>워크스페이스:</span>
+              <select
+                value={wsId ?? ""}
+                onChange={(e) => setSelectedWsId(Number(e.target.value))}
+                style={{ padding: "4px 8px", borderRadius: 6, maxWidth: 220 }}
+              >
+                {wsList.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.name}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
           {members.length > 1 && (
             <>
               <span style={{ color: "#6B7280" }}>팀원 전환:</span>

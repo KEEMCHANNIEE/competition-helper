@@ -235,15 +235,28 @@
 
 .chat-ai-icon { flex-shrink: 0; margin-top: 2px; }
 
+/* 말풍선을 감싸는 열(내용 크기에 맞춰 폭이 정해지도록) */
+.chat-msg-content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  max-width: 82%;
+  min-width: 0;
+}
+.chat-msg-row.user .chat-msg-content { align-items: flex-end; }
+
 /* Bubble */
 .chat-bubble {
-  min-width: 80px;
-  max-width: 82%;
+  min-width: 40px;
+  max-width: 100%;
+  width: fit-content;
   padding: 12px 20px;
   border-radius: 12px;
   font-size: 14px;
   line-height: 1.7;
-  word-break: break-word;
+  /* 한글 단어는 중간에서 끊지 않고(공백에서만 줄바꿈), 아주 긴 URL 등만 강제로 끊는다 */
+  word-break: keep-all;
+  overflow-wrap: anywhere;
 }
 
 .chat-bubble.user {
@@ -279,6 +292,8 @@
 }
 
 .chat-bubble.assistant li { margin: 4px 0; }
+.chat-bubble.assistant p { margin: 0 0 10px; }
+.chat-bubble.assistant p:last-child { margin-bottom: 0; }
 .chat-bubble.assistant strong { font-weight: 700; color: #111827; }
 .chat-bubble.assistant hr { border: none; border-top: 1px solid #E5E7EB; margin: 12px 0; }
 
@@ -288,6 +303,84 @@
   border-radius: 4px;
   font-size: 13px;
   font-family: 'Menlo', monospace;
+}
+
+/* 추천 공모전 카드 (role="recommend" 기록으로 그린다) */
+.chat-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(480px, 100%);
+}
+
+.chat-card {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  text-align: left;
+  background: #ffffff;
+  border: 1px solid #E5E7EB;
+  border-radius: 12px;
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.chat-card:hover {
+  border-color: #2563EB;
+  box-shadow: 0 1px 4px rgba(37, 99, 235, 0.15);
+}
+
+.chat-card-num {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #EFF6FF;
+  color: #2563EB;
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+
+.chat-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #111827;
+  line-height: 1.4;
+}
+
+.chat-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: #6B7280;
+}
+
+.chat-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.chat-card-tag {
+  font-size: 11.5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #F3F4F6;
+  color: #374151;
+}
+
+.chat-card-hint {
+  font-size: 11.5px;
+  color: #9CA3AF;
+  margin-top: 6px;
 }
 
 /* Workspace Button */

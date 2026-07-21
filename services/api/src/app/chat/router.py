@@ -105,7 +105,8 @@ def list_conversations(
 ) -> list[ConversationSummary]:
     """현재 사용자의 대화 목록(메시지 포함, 최신순). 프론트가 새로고침 후 대화를 복원한다.
 
-    role=user/assistant 만 채팅 말풍선으로 노출한다(topic/log 는 내부 기록이므로 제외).
+    role=user/assistant 를 채팅 말풍선으로 노출한다(topic/log 는 내부 기록이므로 제외).
+    recommend 는 프론트가 추천 카드를 다시 그릴 수 있도록 함께 내려준다.
     """
     convs = db.scalars(
         select(Conversation)
@@ -119,11 +120,11 @@ def list_conversations(
             select(Message)
             .where(
                 Message.conversation_id == conv.id,
-                Message.role.in_(["user", "assistant"]),
+                Message.role.in_(["user", "assistant", "recommend"]),
             )
             .order_by(Message.created_at.asc(), Message.id.asc())
         ).all()
-        if not rows:
+        if not any(m.role in ("user", "assistant") for m in rows):
             continue  # 빈 대화는 건너뛴다
         title = next((m.content for m in rows if m.role == "user"), "새 대화")[:20]
         result.append(
@@ -179,7 +180,11 @@ def get_chat_state(
     ).all()
 
     messages = [MessageOut(role=m.role, content=m.content) for m in rows]
-    pending = bool(rows) and rows[-1].role == "user"
+    # pending 판정은 실제 대화(user/assistant) 기준. recommend/log 같은 내부 기록이
+    # user 메시지 뒤·assistant 답변 앞에 저장되는 순간 폴링이 "답변 완료"로 오인해
+    # 텍스트 없는 카드만 그리는 레이스를 막는다.
+    convo_rows = [m for m in rows if m.role in ("user", "assistant")]
+    pending = bool(convo_rows) and convo_rows[-1].role == "user"
 
     return ChatStateOut(
         conversation_id=conv.id,

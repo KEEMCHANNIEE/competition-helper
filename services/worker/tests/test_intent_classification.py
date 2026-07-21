@@ -46,3 +46,23 @@ def test_classify_intent_falls_back_when_llm_answer_unparseable():
 def test_classify_intent_returns_study_default_for_empty_text():
     result = agent._classify_intent("", llm=_BoomLLM())
     assert result == {"intent": "study", "matched_on": "default"}
+
+
+def test_classify_intent_parses_share_and_wrapup_llm_answers():
+    assert agent._classify_intent(
+        "저장 말고 유진한테만 공유해줘", llm=_CannedLLM("share")
+    ) == {"intent": "share", "matched_on": "llm"}
+    assert agent._classify_intent(
+        "오늘은 여기까지만 할게", llm=_CannedLLM("wrapup")
+    ) == {"intent": "wrapup", "matched_on": "llm"}
+
+
+def test_share_keyword_fallback_beats_log_when_llm_fails():
+    # "저장"이 섞여 있어도 "~한테만 공유"가 핵심이면 log 가 아니라 share.
+    result = agent._classify_intent("저장 말고 유진한테만 공유해줘", llm=_BoomLLM())
+    assert result == {"intent": "share", "matched_on": "keyword"}
+
+
+def test_wrapup_keyword_fallback_when_llm_fails():
+    result = agent._classify_intent("오늘은 여기까지만 할게", llm=_BoomLLM())
+    assert result == {"intent": "wrapup", "matched_on": "keyword"}

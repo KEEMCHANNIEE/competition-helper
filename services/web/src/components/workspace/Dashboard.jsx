@@ -9,7 +9,10 @@ export default function Dashboard({ workspace, onMenuChange, onToggleTask, onSta
   const { contest, tasks, schedules, meetings, insights } = workspace;
 
   const todayTasks = tasks.filter((t) => !t.completed).slice(0, 5);
+  // "Upcoming"이므로 이미 지난 일정은 제외한다(전체는 Schedule 메뉴에서).
+  const todayStr = new Date().toISOString().slice(0, 10);
   const upcomingSchedules = [...schedules]
+    .filter((s) => s.date >= todayStr)
     .sort((a, b) => a.date.localeCompare(b.date))
     .slice(0, 5);
   const recentMeetings = [...meetings]
@@ -92,6 +95,7 @@ export default function Dashboard({ workspace, onMenuChange, onToggleTask, onSta
             <button className="ws-card-link" onClick={() => onMenuChange("schedule")}>전체 보기</button>
           </div>
           <div className="ws-schedule-list">
+            {upcomingSchedules.length === 0 && <div className="ws-empty">예정된 일정이 없어요</div>}
             {upcomingSchedules.map((s) => (
               <div key={s.id} className="ws-schedule-item">
                 <span className="ws-schedule-date">{formatDate(s.date)}</span>

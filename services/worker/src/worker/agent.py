@@ -36,10 +36,10 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import re
 from collections.abc import Callable
-from datetime import date
 
 from contest_helper_core.db import get_engine
 from contest_helper_core.models import (
@@ -62,15 +62,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from worker import competition_agent
 from worker.llm import GeminiClient, LLMClient
 from worker.mcp_tools.competitions import (
-    KNOWN_CATEGORIES,
-    KNOWN_TARGETS,
-    TARGET_NO_RESTRICTION,
-    CompetitionDetailOut,
-    CompetitionSearchFilters,
     get_competition_detail,
     search_competitions,
 )
 from worker.mcp_tools.registry import build_registry
+from worker.search_filters import apply_filters, extract_keyword_and_filters
 from worker.mcp_tools.web_search import web_search
 from worker.progress_agent import (
     evaluate_progress,
@@ -78,12 +74,17 @@ from worker.progress_agent import (
     weekly_report,
 )
 from worker.rag import semantic_search
+from worker.style import STYLE_GUIDE
 
 # 의도 분류는 LLM(GeminiClient.generate)이 담당한다. 이 키워드 dict 는 LLM 호출이
 # 실패했을 때(자격증명 문제·네트워크 장애 등) 쓰는 규칙 기반 폴백 전용이다.
 _INTENT_KEYWORDS: dict[str, list[str]] = {
+    # share 는 "저장 말고 C한테만 공유해줘"처럼 저장 표현이 섞이므로 log 보다 먼저 검사.
+    "share": ["한테만 공유", "에게만 공유", "한테 공유", "에게 공유", "만 공유해"],
     # log 는 "워크스페이스에 저장해줘" 처럼 workspace 키워드와 겹치므로 workspace 보다 먼저 검사.
     "log": ["저장해", "기록해", "실행 로그", "작업한 거", "오늘 한 거", "로그로 남겨"],
+    # wrapup 은 오늘 작업을 마무리하는 발화(S-02 STEP01 "오늘은 여기까지만 할게").
+    "wrapup": ["여기까지만", "오늘은 여기까지", "이만할게", "이만 할게", "다음에 이어서"],
     # workspace 는 plan("계획 만들") 과 혼동되지 않도록 먼저 검사한다.
     "workspace": ["워크스페이스 만들", "워크스페이스 생성", "워크스페이스 열", "작업공간 만들"],
     # wsedit 은 "만들어줘"(workspace)와 겹치지 않는 "바꿔/수정/변경" 표현만 잡는다.
@@ -94,12 +95,25 @@ _INTENT_KEYWORDS: dict[str, list[str]] = {
         "워크스페이스 이름", "워크스페이스 수정", "이름 바꿔", "이름을 바꿔", "이름으로 바꿔",
         "공모전 변경", "공모전으로 바꿔", "공모전으로 변경", "공모전 연결", "다시 연결",
     ],
+    # wsinfo 는 조회("현황/상태/어떤")라 workspace(생성)·wsedit(수정) 표현과 겹치지 않는다.
+    "wsinfo": [
+        "워크스페이스 현황", "워크스페이스 상태", "어떤 워크스페이스", "무슨 워크스페이스",
+        "워크스페이스 정보", "워크스페이스 알려줘",
+    ],
+    # select 는 직전 추천 목록에서 하나를 고르는 발화("1번으로 할게", "OO대회로 하자").
+    # 예전엔 아무 인텐트에도 안 걸려 study 로 새면서 워크스페이스 생성으로 이어지지
+    # 못했다. "확정" 은 주제 확정("첫 번째 주제로 확정 ... 계획 짜줘", S-01 STEP05)이
+    # plan 대신 여기 걸리지 않도록 넣지 않는다.
+    "select": [
+        "로 할게", "로 하자", "로 결정", "로 진행하자", "이걸로", "그걸로", "번으로 갈게",
+    ],
     # topic 은 "주제 추천" 처럼 recommend("추천") 과 겹칠 수 있어 recommend 보다 먼저 둔다.
     "topic": ["주제 추천", "주제 제안", "주제 후보", "주제 정해", "주제 뽑", "무슨 주제", "어떤 주제"],
     # advice 는 특정 할 일을 "어떻게 시작/진행"할지 방법을 묻는 질문(S-02 STEP01).
     # plan("계획/일정") 과 겹치지 않도록 "어떻게 ~" 표현 위주로 잡고 plan 보다 먼저 검사.
     "advice": ["어떻게 시작", "어떻게 하면 좋을", "어떻게 진행하면", "어떻게 접근", "어디서부터", "어떻게 해야 할"],
-    "plan": ["계획", "일정", "역할", "스케줄", "마감까지"],
+    # "주차" 는 계획 저장 후 "1주차 줄여줘" 같은 수정 요청이 plan 으로 다시 오게 한다.
+    "plan": ["계획", "일정", "역할", "스케줄", "마감까지", "주차"],
     # "찾아줘"만 넣으면 "수상작 찾아줘"처럼 이미 언급된 공모전에 대한 사실 질문(study)까지
     # 걸려버려서, 새 공모전 탐색 의미가 뚜렷한 표현으로만 좁힌다.
     "recommend": ["추천", "공모전 찾아줘", "공모전 알려줘", "뭐가 있어"],
@@ -117,6 +131,49 @@ _INTENT_KEYWORDS: dict[str, list[str]] = {
     "background": ["경험이 있", "경험 있", "해봤", "해본 적", "잘해", "잘합니다", "관심이 많", "관심 많", "관심이 있"],
 }
 _VALID_INTENTS = (*_INTENT_KEYWORDS.keys(), "study")
+
+# 워크스페이스가 있어야 동작하는 인텐트. 대화가 미연결이면 chat() 이 사용자의 소속
+# 워크스페이스에 자동 연결한다(_adopt_workspace_if_missing). 생성·선택 계열
+# (workspace/wsedit/select)은 새 워크스페이스를 만들거나 바꾸는 흐름이라 제외.
+_WORKSPACE_INTENTS = frozenset(
+    {
+        "log", "share", "logmerge", "taskdone", "plan", "progress",
+        "teamstatus", "riskcheck", "report", "advice", "wsinfo",
+    }
+)
+
+
+def _adopt_workspace_if_missing(
+    conversation_id: int,
+    user_id: int,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+) -> None:
+    """미연결 대화를 사용자의 (가장 최근) 소속 워크스페이스에 연결한다.
+
+    팀원이 메인 화면의 "할 일 클릭"이 아니라 새 채팅으로 시작하면 대화에
+    workspace_id 가 없어 저장/계획/공유가 전부 거절되는 문제의 안전망.
+    소속 워크스페이스가 없으면 아무것도 하지 않는다(기존 안내 문구 유지).
+    """
+    if session_factory is None:
+        session_factory = _default_session_factory()
+    with session_factory() as session:
+        conv = session.get(Conversation, conversation_id)
+        if conv is None or conv.workspace_id is not None:
+            return
+        member_ws = (
+            session.execute(
+                select(WorkspaceMember.workspace_id)
+                .where(WorkspaceMember.user_id == user_id)
+                .order_by(WorkspaceMember.id.desc())
+            )
+            .scalars()
+            .first()
+        )
+        if member_ws is None:
+            return
+        conv.workspace_id = member_ws
+        session.commit()
 
 def run(payload: RecommendJobPayload) -> list[RecommendationOut]:
     """추천 작업 1건을 실행해 추천 결과 리스트를 반환한다. (과제 stub)
@@ -212,7 +269,43 @@ def chat(
         (m.content for m in reversed(history) if m.role == "user"), ""
     )
 
-    message: dict = _classify_intent(last_user_msg, llm=llm)  # {"intent": ..., "matched_on": ...}
+    # 1차: 도구 호출 오케스트레이션 — 인텐트를 미리 분류하지 않고, LLM이 대화 전체를
+    # 보고 필요한 도구(핸들러)를 직접 고른다. "마지막 문장만 보고 17지선다" 방식의
+    # 고질적 오분류(select/wsedit 혼동 등)를 구조적으로 제거한다.
+    # 실패(모델 오류·빈 응답·도구 예외) 시 아래의 기존 인텐트 라우터로 폴백한다.
+    if last_user_msg.strip():
+        try:
+            return _chat_with_tools(
+                conversation_id, user_id, history, last_user_msg,
+                session_factory=session_factory, llm=llm,
+            )
+        except Exception as exc:  # noqa: BLE001 - 인텐트 폴백 라우터가 이어받는다
+            print(
+                f"[chat] conv={conversation_id} tool-agent 실패 → 인텐트 폴백: {exc}",
+                flush=True,
+            )
+
+    # 2차(폴백): 기존 인텐트 분류 라우터.
+    # 직전 답변이 "~해 볼까요?" 제안으로 끝났고 사용자가 짧게 수락한 경우,
+    # "응/좋아" 가 study 로 새지 않도록 그 제안의 인텐트로 바로 확정한다.
+    accepted = _accepted_offer_intent(history, last_user_msg)
+    continuation = None if accepted else _continuation_intent(history, last_user_msg)
+    if accepted:
+        message: dict = {"intent": accepted, "matched_on": "offer"}
+        if accepted in ("workspace", "wsedit"):
+            # 수락 메시지("응")엔 순번·이름이 없으므로, 제안의 근거였던 직전 사용자
+            # 발화("1번으로 할게")를 공모전 특정용 컨텍스트로 쓴다.
+            user_msgs = [m.content for m in history if m.role == "user"]
+            if len(user_msgs) >= 2:
+                last_user_msg = user_msgs[-2]
+    elif continuation and _classify_intent_by_keyword(last_user_msg)["intent"] in (
+        "study", "background"
+    ):
+        # 직전 되묻기에 대한 자유 서술 답변("3주 정도 필요해")은 그 흐름으로 되돌린다.
+        # 단, 답변에 뚜렷한 다른 명령("계획 짜줘" 등)이 있으면 그쪽을 우선한다.
+        message = {"intent": continuation, "matched_on": "continuation"}
+    else:
+        message = _classify_intent(last_user_msg, llm=llm)  # {"intent": ..., "matched_on": ...}
     # 데모/디버그용 로그: worker 컨테이너 로그에서 intent 분류 결과를 실시간으로 본다.
     print(
         f"[chat] conv={conversation_id} intent={message['intent']} "
@@ -221,18 +314,55 @@ def chat(
     )
     tools = build_registry()
 
+    # 워크스페이스가 필요한 요청인데 이 대화가 미연결이면(팀원이 할 일 클릭이 아니라
+    # 새 채팅으로 시작한 경우), 소속 워크스페이스에 자동 연결해 "워크스페이스가
+    # 없어요" 거절로 막히지 않게 한다. 생성/선택 계열(workspace/select 등)은 새
+    # 워크스페이스를 만드는 흐름이므로 제외한다.
+    if message["intent"] in _WORKSPACE_INTENTS:
+        _adopt_workspace_if_missing(
+            conversation_id, user_id, session_factory=session_factory
+        )
+
     if message["intent"] == "log":
         return _handle_log(
-            conversation_id, user_id, session_factory=session_factory, llm=llm
+            conversation_id, user_id, last_user_msg,
+            session_factory=session_factory, llm=llm,
+        )
+    if message["intent"] == "share":
+        return _handle_share(
+            conversation_id, user_id, last_user_msg,
+            session_factory=session_factory, llm=llm,
+        )
+    if message["intent"] == "wrapup":
+        return _handle_wrapup()
+    if message["intent"] == "logmerge":
+        return _handle_log_merge_confirm(
+            conversation_id, session_factory=session_factory
+        )
+    if message["intent"] == "taskdone":
+        return _handle_taskdone(
+            conversation_id, history, session_factory=session_factory
         )
     if message["intent"] == "workspace":
         return _handle_create_workspace(
-            conversation_id, user_id, last_user_msg, session_factory=session_factory
+            conversation_id, user_id, last_user_msg,
+            session_factory=session_factory, llm=llm,
         )
     if message["intent"] == "wsedit":
         return _handle_workspace_edit(
             conversation_id, last_user_msg, session_factory=session_factory, llm=llm
         )
+    if message["intent"] == "wsinfo":
+        return _handle_workspace_info(
+            conversation_id, tools, session_factory=session_factory
+        )
+    if message["intent"] == "select":
+        reply = _handle_select(
+            conversation_id, last_user_msg, session_factory=session_factory, llm=llm
+        )
+        if reply is not None:
+            return reply
+        # 고를 추천 목록이 없었으면 일반 질문으로 취급(study 폴백).
     if message["intent"] == "background":
         return _handle_background(
             conversation_id, session_factory=session_factory
@@ -274,9 +404,536 @@ def chat(
     )
 
 
+def _chat_with_tools(
+    conversation_id: int,
+    user_id: int,
+    history: list[MessageOut],
+    last_user_msg: str,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+    llm: LLMClient | None = None,
+) -> str:
+    """도구 호출 오케스트레이션으로 한 턴을 처리한다. (인텐트 분류 없음)
+
+    기존 인텐트 핸들러들을 도구(파이썬 함수)로 감싸 LLM에 넘기고
+    (``generate_with_tools`` — study 경로에서 검증된 패턴), 모델이 대화 맥락을 보고
+    필요한 도구를 직접 호출한다. 순번↔id 해석·멱등성·알림 같은 결정적 로직은
+    전부 도구(핸들러) 내부에 그대로 남는다.
+
+    Raises:
+        Exception: 모델 호출 실패·빈 응답 등. 호출부(chat)가 인텐트 라우터로 폴백.
+    """
+    client = llm or GeminiClient()
+    registry = build_registry()
+
+    # 행동 도구의 출력을 기록한다. 행동 도구가 실행된 턴은 모델의 재구성(요약·
+    # 왜곡 위험)을 버리고 도구 출력을 그대로 최종 답변으로 쓴다 — 핸들러 응답은
+    # 이미 완성된 사용자向 문장이고, 카드 저장 등 부수효과와 텍스트가 어긋나면
+    # 안 되기 때문(예: 추천 카드를 저장해 놓고 "못 찾았다"고 말하는 사고 방지).
+    action_outputs: list[str] = []
+    callables = [
+        _record_output(fn, action_outputs)
+        for fn in _build_action_tools(
+            conversation_id, user_id, history, last_user_msg, registry,
+            session_factory=session_factory, llm=llm,
+        )
+    ]
+    # study 경로의 조회 도구들(비교/상세/웹검색/팀적합도/저장목록)도 같이 노출한다.
+    callables.extend(
+        [
+            competition_agent._make_compare_tool(registry),
+            competition_agent._make_get_competition_detail_tool(registry),
+            competition_agent._make_web_search_tool(registry),
+        ]
+    )
+    workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
+    if workspace_id is not None:
+        callables.append(
+            competition_agent._make_team_fit_tool(workspace_id, registry, session_factory)
+        )
+        callables.append(
+            competition_agent._make_list_saved_tool(workspace_id, session_factory)
+        )
+
+    latest = competition_agent.load_latest_recommend_list(
+        conversation_id, session_factory=session_factory
+    )
+
+    # 추천 카드 클릭은 프론트가 보내는 "고정 문구"(UI 계약)라 모델을 거치지 않고
+    # 결정적으로 전체 상세를 보여준다 — 모델이 조회 도구로 요약해버리는 것 방지.
+    card_click = re.match(r"^\s*([1-9])\s*번 공모전 더 자세히 알려줘\s*$", last_user_msg)
+    if card_click and latest:
+        n = int(card_click.group(1))
+        if 1 <= n <= len(latest):
+            reply = _show_details_reply(registry, latest[n - 1]["id"])
+            if reply is not None:
+                return reply
+
+    recommend_block = ""
+    if latest:
+        listing = "\n".join(f"{e['ordinal']}. {e['title']} (id={e['id']})" for e in latest)
+        recommend_block = f"""
+
+[직전 추천/검색 목록 — 순번 ↔ 내부 id]
+{listing}
+사용자가 "첫 번째/1번/이거"처럼 가리키면 위 목록(또는 직전 대화)의 그 공모전을 뜻합니다.
+조회 도구를 호출할 때는 이 id를 쓰고, id는 어떤 형태로도 사용자에게 노출하지 마세요."""
+
+    convo = [m for m in history if m.role in ("user", "assistant")][-30:]
+    history_text = "\n".join(
+        f"{'사용자' if m.role == 'user' else '어시스턴트'}: {m.content}" for m in convo
+    )
+
+    prompt = f"""당신은 공모전 준비를 돕는 팀 도우미입니다. 아래 대화의 다음 답변을 만드세요.
+
+[도구 사용 규칙 — 반드시 지키세요]
+1. 사용자가 행동을 요청하면(추천/재검색, 워크스페이스 생성·수정·현황, 주제 제안,
+   계획 수립·수정, 작업 저장·공유·병합 확정, 할 일 완료, 진행률·팀 현황·리스크 점검·
+   주간 리포트, 작업 시작 방법) 반드시 해당 도구를 실제로 호출한 뒤 그 결과로 답하세요.
+   도구를 부르지 않고 "했다"고 말하는 것은 금지입니다.
+2. 헷갈리기 쉬운 경우의 기준:
+   - 새 공모전을 찾아/추천해 달라 → recommend_competitions (목록을 절대 지어내지 말 것)
+   - 워크스페이스가 이미 있는데 "이 공모전으로 연결해줘/바꿔줘/이름 바꿔줘" → update_workspace
+   - 워크스페이스가 아직 없고 만들어 달라거나 공모전을 확정하고 시작하자 → create_workspace
+   - 직전 답변의 "~할까요?" 제안에 사용자가 "응/좋아"로 수락 → 그 제안에 해당하는 도구를 즉시 호출
+3. 도구가 완성된 답변 문장을 반환하면 내용을 바꾸거나 요약하지 말고 그대로 전달하세요.
+4. 특정 공모전의 사실(수상작·심사위원·자격·마감·비교)은 조회 도구를 호출한 뒤 답하세요. 짐작 금지.
+   단, "자세히/상세히 알려줘"처럼 전체 정보를 요청하면 get_competition_detail 이 아니라
+   show_competition_details 를 호출하세요(전체 정보를 줄이지 않고 그대로 보여줘야 합니다).
+5. 개념 설명·잡담처럼 도구가 필요 없는 말은 그냥 답하세요.
+   - 팀원이 자기 경험·강점을 소개하기만 한 경우: 도구를 부르지 말고 기억해 뒀다고
+     답하며 다른 팀원의 배경을 물어보세요(주제 제안을 명시적으로 요청받기 전까지
+     propose_topics 금지).
+   - 오늘 한 작업을 이야기하기만 한 경우: 도구를 부르지 말고 작업 내용에 반응하며
+     이어서 도우세요(저장을 명시적으로 요청받기 전까지 save_work_log 금지).
+   - 사용자가 작업을 마무리하려 하면("오늘은 여기까지만") 실행 로그 저장을 제안하는
+     질문으로 답하세요(도구 호출은 사용자가 수락한 다음 턴에).
+6. 내부 고유번호(id)는 어떤 형태로도 사용자에게 노출하지 마세요.
+
+{STYLE_GUIDE}{recommend_block}
+
+[대화 기록]
+{history_text}
+
+사용자의 마지막 메시지: {last_user_msg}"""
+
+    reply = client.generate_with_tools(prompt, tools=callables)
+    # 행동 도구가 실행됐으면 그 출력이 곧 답변이다(모델의 재구성 무시).
+    if action_outputs:
+        return "\n\n".join(action_outputs).strip()
+    if not reply or not reply.strip():
+        raise RuntimeError("도구 오케스트레이션이 빈 응답을 반환했습니다")
+    return reply.strip()
+
+
+# 도구가 "실행하지 않기로" 판단했을 때 모델에게만 돌려주는 힌트의 접두어.
+# 이 접두어가 붙은 출력은 최종 답변으로 기록하지 않는다(모델이 대화로 답하게).
+_NO_RECORD = "[도구 미실행] "
+
+
+def _show_details_reply(registry: dict, competition_id: int) -> str | None:
+    """공모전 상세 전체를 보여주는 완성 답변을 만든다(없으면 None)."""
+    detail = registry["get_competition_detail"](competition_id)
+    if detail is None:
+        return None
+    return (
+        "이 공모전에 대해 지금까지 모은 정보를 전부 정리했어요.\n\n"
+        + competition_agent._format_detail(detail)
+        + "\n\n이 공모전으로 정하시면 워크스페이스를 만들어 바로 준비를 시작할 수 있어요. 어떻게 할까요?"
+    )
+
+
+def _record_output(fn: Callable, sink: list[str]) -> Callable:
+    """도구 함수를 감싸 반환값을 sink 에 기록한다(이름·docstring·시그니처 보존)."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        out = fn(*args, **kwargs)
+        if not str(out).startswith(_NO_RECORD):
+            sink.append(str(out))
+        return out
+
+    return wrapper
+
+
+def _wants_log_save(last_user_msg: str, history: list[MessageOut]) -> bool:
+    """이번 발화가 '명시적 저장 요청'인지 결정적으로 판단한다.
+
+    모델(flash 계열)이 작업 보고("오늘 ~ 정리했어")에도 save_work_log 를 부르는
+    과잉 호출을 도구 쪽에서 걸러내기 위한 가드. 다음 중 하나면 저장 요청으로 본다:
+    - 저장/기록/병합 키워드가 발화에 직접 있음
+    - 직전 답변의 저장 제안("저장해 드릴까요/저장할까요")에 대한 짧은 수락
+    - 직전 답변이 부분 저장 범위 질문이었음(이번 발화 = 범위 지정)
+    """
+    if any(k in last_user_msg for k in ("저장", "기록", "남겨", "합쳐", "합치", "로그")):
+        return True
+    last_assistant = next(
+        (m.content for m in reversed(history) if m.role == "assistant"), ""
+    )
+    if "어느 부분부터 어느 부분까지 저장할까요" in last_assistant:
+        return True
+    if ("저장해 드릴까요" in last_assistant or "저장할까요" in last_assistant) and (
+        len(last_user_msg.strip()) <= 12
+        and any(w in last_user_msg for w in _AFFIRMATIONS)
+        and not any(n in last_user_msg for n in _NEGATIONS)
+    ):
+        return True
+    return False
+
+
+def _build_action_tools(
+    conversation_id: int,
+    user_id: int,
+    history: list[MessageOut],
+    last_user_msg: str,
+    registry: dict,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+    llm: LLMClient | None = None,
+) -> list[Callable]:
+    """행동(쓰기) 핸들러들을 LLM 도구로 감싼 클로저 목록을 만든다.
+
+    docstring 이 곧 도구 선택 기준이다(Automatic Function Calling). 워크스페이스가
+    필요한 도구는 진입 시 ``_adopt_workspace_if_missing`` 으로 미연결 대화를 소속
+    워크스페이스에 붙인다(팀원이 새 채팅으로 시작한 경우 안전망).
+    """
+
+    def _adopt() -> None:
+        _adopt_workspace_if_missing(
+            conversation_id, user_id, session_factory=session_factory
+        )
+
+    def recommend_competitions() -> str:
+        """새 공모전을 찾아 추천하거나, 조건을 바꿔 다시 검색한다.
+
+        "공모전 추천해줘", "마감 여유 있는 다른 거 없어?", "상금 더 큰 거",
+        "비슷한 다른 것도"처럼 새 공모전 탐색·재검색 요청이면 호출하세요.
+        조건 파악·검색·목록 구성까지 완성된 답변을 반환합니다.
+        주의: 이미 대화에 나온 공모전을 워크스페이스에 "연결/변경"해 달라는 요청은
+        검색이 아닙니다 — 이 도구가 아니라 update_workspace 를 호출하세요.
+        """
+        return _handle_recommend(
+            history, last_user_msg, conversation_id, session_factory=session_factory
+        )
+
+    def show_competition_details(competition_id: int) -> str:
+        """공모전 하나의 상세 정보를 "빠짐없이 전부" 보여준다.
+
+        "1번 공모전 더 자세히 알려줘", "이 공모전 자세히/상세 정보 보여줘"처럼
+        전체 정보를 요청하면(추천 카드 클릭 포함) 호출하세요. competition_id 는
+        [직전 추천/검색 목록]의 id 를 씁니다.
+        특정 사실 하나만 묻는 질문(예: "혼자 나갈 수 있어?", "마감 언제야?")은
+        이 도구가 아니라 get_competition_detail 로 확인해 그 부분만 답하세요.
+
+        Args:
+            competition_id: 상세를 보여줄 공모전의 내부 id.
+        """
+        reply = _show_details_reply(registry, competition_id)
+        if reply is None:
+            return (
+                _NO_RECORD
+                + "해당 id 의 공모전을 찾지 못했습니다. [직전 추천/검색 목록]의 id 를 확인해 다시 시도하세요."
+            )
+        return reply
+
+    def create_workspace() -> str:
+        """새 워크스페이스를 만들고 방금 얘기한 공모전을 연결한다.
+
+        사용자가 워크스페이스를 만들어 달라고 하거나, 공모전을 확정하고 팀 준비를
+        시작하자고 할 때 호출하세요. 어떤 공모전인지는 직전 대화에서 스스로 찾습니다.
+        이미 연결된 워크스페이스가 있으면 새로 만들지 않고 안내만 합니다.
+        """
+        return _handle_create_workspace(
+            conversation_id, user_id, last_user_msg,
+            session_factory=session_factory, llm=llm,
+        )
+
+    def update_workspace() -> str:
+        """이미 있는 워크스페이스의 이름을 바꾸거나 연결된 공모전을 바꾼다.
+
+        "워크스페이스에 이 공모전 연결해줘", "그럼 지금 공모전 연결해줘"(직전 대화의
+        그 공모전을 연결), "다른 공모전으로 바꿔줘", "이름 바꿔줘"처럼 기존
+        워크스페이스의 설정 변경 요청이면 호출하세요. 자격 요건이 걱정돼도 사용자가
+        연결을 요청했으면 먼저 연결부터 하세요.
+        """
+        _adopt()
+        return _handle_workspace_edit(
+            conversation_id, last_user_msg, session_factory=session_factory, llm=llm
+        )
+
+    def get_workspace_status() -> str:
+        """지금 연결된 워크스페이스의 현황(공모전·팀원·할 일 진행)을 보여준다.
+
+        "지금 어떤 워크스페이스야?", "워크스페이스 현황 알려줘"처럼 물으면 호출하세요.
+        """
+        _adopt()
+        return _handle_workspace_info(
+            conversation_id, registry, session_factory=session_factory
+        )
+
+    def propose_topics() -> str:
+        """팀원들의 배경·강점을 종합해 공모전 주제 후보를 제안한다.
+
+        "주제 추천해줘/정하자", 주제를 좁히거나 다시 제안해 달라는 "명시적 요청"일 때만
+        호출하세요. 팀원이 자기 배경을 소개하기만 한 발화에는 호출하면 안 됩니다.
+        """
+        # 결정적 가드: "주제" 언급이나 주제 제안 수락이 아니면 실행하지 않는다.
+        last_assistant = next(
+            (m.content for m in reversed(history) if m.role == "assistant"), ""
+        )
+        accepted_topic_offer = "주제 후보를 제안해 볼까요" in last_assistant and any(
+            w in last_user_msg for w in _AFFIRMATIONS
+        )
+        if "주제" not in last_user_msg and not accepted_topic_offer:
+            return (
+                _NO_RECORD
+                + "이 발화는 주제 제안 요청이 아닙니다. 배경을 기억해 뒀다고 답하고 "
+                "다른 팀원의 배경을 물어보세요."
+            )
+        _adopt()
+        return _handle_topic(
+            conversation_id, session_factory=session_factory, llm=llm
+        )
+
+    def create_or_revise_plan() -> str:
+        """마감까지의 주차별 준비 계획을 세우거나 수정하고 팀원별로 배정한다.
+
+        "계획 짜줘", "역할 나눠줘", "1주차 줄여줘", "B 일 줄여줘"처럼 계획
+        수립·조정 요청이면 호출하세요. 기존 계획이 있으면 교체 방식으로 수정합니다.
+        """
+        _adopt()
+        return _handle_plan(
+            conversation_id, last_user_msg, registry,
+            session_factory=session_factory, llm=llm,
+        )
+
+    def save_work_log() -> str:
+        """오늘 작업한 대화 내용을 요약해 워크스페이스 실행 로그에 저장한다.
+
+        사용자가 저장을 "명시적으로" 요청할 때만 호출하세요: "오늘 작업한 거
+        저장해줘", "이 부분만 저장해줘", "지난번에 저장한 거랑 합쳐줘",
+        저장 제안("저장해 드릴까요?")에 대한 수락("응/저장해줘") 등.
+        주의: 작업 내용을 이야기하기만 한 발화(예: "오늘 데이터셋 3개 정리했어")에는
+        절대 호출하지 말고, 대화로 반응하며 계속 작업을 도우세요.
+        병합 미리보기("이대로 저장할까요?")에 대한 수락만 confirm_log_merge 입니다.
+        """
+        # 결정적 가드: 명시적 저장 요청이 아니면 실행하지 않는다(모델 과잉 호출 방어).
+        if not _wants_log_save(last_user_msg, history):
+            return (
+                _NO_RECORD
+                + "이 발화는 명시적 저장 요청이 아닙니다. 저장하지 않았습니다 — "
+                "작업 내용에 대화로 반응하고, 필요하면 저장 여부를 물어보세요."
+            )
+        _adopt()
+        return _handle_log(
+            conversation_id, user_id, last_user_msg,
+            session_factory=session_factory, llm=llm,
+        )
+
+    def confirm_log_merge() -> str:
+        """직전의 로그 병합 미리보기를 확정해 기존 실행 로그를 교체한다.
+
+        직전 어시스턴트 답변에 "이대로 저장할까요?"라는 병합 미리보기가 있고
+        사용자가 수락("응/좋아")했을 때만 호출하세요. 그 문구가 직전 답변에 없다면
+        절대 호출하지 마세요 — 일반 저장 요청은 save_work_log 입니다.
+        """
+        _adopt()
+        return _handle_log_merge_confirm(
+            conversation_id, session_factory=session_factory
+        )
+
+    def share_work_with_member() -> str:
+        """작업 요약을 워크스페이스 전체 공개(로그) 대신 특정 팀원에게만 보낸다.
+
+        "저장 말고 OO한테만 공유해줘"처럼 특정 팀원에게만 전달해 달라는 요청이면
+        호출하세요. 수신자 특정·전송·알림까지 처리합니다.
+        """
+        _adopt()
+        return _handle_share(
+            conversation_id, user_id, last_user_msg,
+            session_factory=session_factory, llm=llm,
+        )
+
+    def complete_task(task_title: str) -> str:
+        """워크스페이스의 할 일 하나를 완료(done) 처리한다.
+
+        사용자가 특정 할 일을 끝냈다고 하거나, 직전 답변의 "'OO' 할 일을 완료
+        처리할까요?" 제안에 수락했을 때 그 제목으로 호출하세요.
+
+        Args:
+            task_title: 완료 처리할 할 일 제목(대화에 나온 제목 그대로).
+        """
+        _adopt()
+        return _complete_task_by_title(
+            conversation_id, task_title, session_factory=session_factory
+        )
+
+    def get_my_progress() -> str:
+        """내(현재 사용자)의 할 일 진행률과 코멘트를 보여준다.
+
+        "내 진행률 어때?", "어디까지 했지?"처럼 개인 진척을 물으면 호출하세요.
+        """
+        _adopt()
+        return _handle_progress(
+            conversation_id, user_id, registry,
+            session_factory=session_factory, llm=llm,
+        )
+
+    def get_team_status() -> str:
+        """팀 전체(팀원별)가 각각 무엇을 했는지 실행 현황을 보여준다.
+
+        "팀 전체 진행 현황", "누가 뭐 했어?"처럼 팀 단위 현황을 물으면 호출하세요.
+        """
+        _adopt()
+        return _handle_team_status(conversation_id, session_factory=session_factory)
+
+    def check_plan_risks() -> str:
+        """현재 현황을 근거로 다음 주 계획의 리스크를 진단하고 조치를 제안한다.
+
+        "이번 주 현황 어때? 다음 주 계획 괜찮아?"처럼 점검·진단 요청이면 호출하세요.
+        """
+        _adopt()
+        return _handle_risk_check(
+            conversation_id, registry, session_factory=session_factory, llm=llm
+        )
+
+    def create_weekly_report() -> str:
+        """팀 전체의 주간 리포트를 집계해 워크스페이스에 저장하고 보여준다.
+
+        "주간 리포트 보여줘/만들어줘" 요청이면 호출하세요.
+        """
+        _adopt()
+        return _handle_report(conversation_id, session_factory=session_factory)
+
+    def advise_task_start() -> str:
+        """맡은 할 일을 어떻게 시작하면 좋을지 공모전 맥락과 연결해 조언한다.
+
+        "OO 해야 하는데 어떻게 시작하면 좋을까?"처럼 작업 방법을 물으면 호출하세요.
+        """
+        _adopt()
+        return _handle_task_advice(
+            conversation_id, last_user_msg, registry,
+            session_factory=session_factory, llm=llm,
+        )
+
+    return [
+        recommend_competitions,
+        show_competition_details,
+        create_workspace,
+        update_workspace,
+        get_workspace_status,
+        propose_topics,
+        create_or_revise_plan,
+        save_work_log,
+        confirm_log_merge,
+        share_work_with_member,
+        complete_task,
+        get_my_progress,
+        get_team_status,
+        check_plan_risks,
+        create_weekly_report,
+        advise_task_start,
+    ]
+
+
+def _complete_task_by_title(
+    conversation_id: int,
+    task_title: str,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+) -> str:
+    """제목으로 todo 할 일을 찾아 완료 처리한다(정확 일치 → 포함 일치 순)."""
+    workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
+    if workspace_id is None:
+        return "아직 연결된 워크스페이스가 없어서 완료 처리할 할 일이 없어요."
+
+    if session_factory is None:
+        session_factory = _default_session_factory()
+    with session_factory() as session:
+        todos = (
+            session.execute(
+                select(Task).where(
+                    Task.workspace_id == workspace_id, Task.status == "todo"
+                )
+            )
+            .scalars()
+            .all()
+        )
+        task = next((t for t in todos if t.title == task_title), None)
+        if task is None:
+            wanted = task_title.strip()
+            task = next(
+                (t for t in todos if wanted and (wanted in t.title or t.title in wanted)),
+                None,
+            )
+        if task is None:
+            return f"'{task_title}' 할 일을 찾지 못했어요. 이미 완료됐거나 이름이 바뀌었을 수 있어요."
+        task.status = "done"
+        done_title = task.title
+        session.commit()
+    return f"✅ '{done_title}' 할 일을 완료 처리했어요. 이어서 진행할 작업이 있나요?"
+
+
 # --------------------------------------------------------------------------- #
 # 과제(stub) 내부 헬퍼: 의도 분류 + 능력별 처리
 # --------------------------------------------------------------------------- #
+
+
+# 어시스턴트가 답변 끝에 던지는 제안 문구 → 사용자가 수락하면 확정할 인텐트.
+_OFFER_MARKERS: list[tuple[str, str]] = [
+    ("주제 후보를 제안해 볼까요", "topic"),
+    ("워크스페이스를 만들까요", "workspace"),
+    ("바꿔 연결할까요", "wsedit"),
+    ("계획을 짜 볼까요", "plan"),
+    ("실행 로그에 저장해 드릴까요", "log"),
+    ("이대로 저장할까요", "logmerge"),
+    ("완료 처리할까요", "taskdone"),
+]
+
+# 어시스턴트의 되묻는 질문 → 사용자의 다음 답변(자유 서술)을 이어받을 인텐트.
+# _OFFER_MARKERS 는 "응/좋아" 같은 짧은 수락 전용이고, 여기는 "3주 정도 필요해"처럼
+# 내용이 있는 답변이 키워드/LLM 분류로 엉뚱하게 새지 않도록 직전 질문의 흐름으로 되돌린다.
+_CONTINUATION_MARKERS: list[tuple[str, str]] = [
+    ("어느 부분부터 어느 부분까지 저장할까요", "log"),      # 부분 저장 범위 답변
+    ("준비 기간이 얼마나 필요", "recommend"),               # 마감 여유 재검색 조건 답변
+]
+
+
+def _continuation_intent(history: list[MessageOut], last_user_msg: str) -> str | None:
+    """직전 어시스턴트의 되묻는 질문에 대한 답변이면 그 흐름의 인텐트를 반환한다."""
+    if not last_user_msg.strip():
+        return None
+    last_assistant = next(
+        (m.content for m in reversed(history) if m.role == "assistant"), ""
+    )
+    for marker, intent in _CONTINUATION_MARKERS:
+        if marker in last_assistant:
+            return intent
+    return None
+_AFFIRMATIONS = ("응", "네", "넵", "예", "그래", "좋아", "좋지", "콜", "오케이", "ㅇㅋ", "고고", "해줘", "해 줘", "부탁")
+_NEGATIONS = ("아니", "안 ", "말고", "나중에", "됐어", "괜찮아")
+
+
+def _accepted_offer_intent(history: list[MessageOut], last_user_msg: str) -> str | None:
+    """직전 어시스턴트 답변의 제안("~해 볼까요?")을 사용자가 짧게 수락했으면 그 인텐트를 반환한다.
+
+    "응"/"좋아" 같은 짧은 수락은 키워드·LLM 분류 모두 study 로 새기 쉬워서,
+    제안-수락 짝을 여기서 먼저 확정한다. 길거나 부정이 섞인 메시지는 건드리지 않는다.
+    """
+    text = last_user_msg.strip()
+    if not text or len(text) > 12:
+        return None
+    if any(neg in text for neg in _NEGATIONS):
+        return None
+    if not any(word in text for word in _AFFIRMATIONS):
+        return None
+    last_assistant = next(
+        (m.content for m in reversed(history) if m.role == "assistant"), ""
+    )
+    for marker, intent in _OFFER_MARKERS:
+        if marker in last_assistant:
+            return intent
+    return None
 
 
 def _classify_intent(text: str, *, llm: LLMClient | None = None) -> dict:
@@ -299,18 +956,28 @@ def _classify_intent(text: str, *, llm: LLMClient | None = None) -> dict:
     # "현황 어때/계획 괜찮아?"(S-03 STEP02) 리스크 점검도 먼저 확정한다.
     if any(k in text for k in _INTENT_KEYWORDS["riskcheck"]):
         return {"intent": "riskcheck", "matched_on": "keyword"}
+    # "OO로 하자/할게" 선택 발화는 LLM 이 wsedit/plan 으로 오분류하기 쉬워 먼저
+    # 확정한다. 단, 워크스페이스 생성·계획 요청이 같이 있으면 그쪽이 우선.
+    if any(k in text for k in _INTENT_KEYWORDS["select"]) and not any(
+        k in text for k in _INTENT_KEYWORDS["workspace"] + _INTENT_KEYWORDS["plan"]
+    ):
+        return {"intent": "select", "matched_on": "keyword"}
 
     prompt = f"""당신은 공모전 준비를 돕는 챗봇의 의도 분류기입니다.
-아래 사용자 메시지를 다음 열세 가지 중 정확히 하나로 분류하고, 그 단어 하나만 답하세요.
+아래 사용자 메시지를 다음 목록 중 정확히 하나로 분류하고, 그 단어 하나만 답하세요.
 다른 설명이나 문장부호 없이 단어 하나만 출력해야 합니다.
 
 - workspace: 아직 없는 워크스페이스를 "새로" 만들어 달라는 요청일 때만 (예: "워크스페이스 만들어줘", "1번으로 워크스페이스 만들어줘"). "바꿔줘/수정해줘/변경해줘"처럼 이미 있는 걸 고치는 요청이면 절대 이게 아니라 wsedit.
 - wsedit: 이미 있는 워크스페이스의 이름을 바꾸거나 연결된 공모전을 다른 것으로 바꿔 달라는 요청 (예: "워크스페이스 이름 바꿔줘", "1번 공모전으로 다시 연결해줘", "공모전 바꿔줘")
-- log: 작업 내용을 저장/기록/남겨 달라고 "명시적으로" 요청할 때만 (예: "오늘 작업한 거 저장해줘"). 단순히 오늘 한 일을 서술하면 study.
+- wsinfo: 지금 연결된 워크스페이스가 뭔지, 그 현황·상태를 물어봄 (예: "지금 어떤 워크스페이스야?", "워크스페이스 현황 알려줘")
+- select: 직전에 보여준 목록에서 하나를 골라 확정하는 발화. 순번("1번으로 할게", "첫 번째 걸로 하자")뿐 아니라 이름으로 고르는 것("그럼 OO공모전으로 하자")도 포함. 단, 같은 메시지에 워크스페이스 생성이나 계획 요청이 함께 있으면 select 가 아니라 그쪽(workspace/plan)으로 분류.
+- log: 작업 내용을 저장/기록/남겨 달라고 "명시적으로" 요청할 때만 (예: "오늘 작업한 거 저장해줘", "지난번에 저장한 거랑 합쳐줘"). 단순히 오늘 한 일을 서술하면 study.
+- share: 워크스페이스에 저장(공개)하는 대신 특정 팀원에게만 내용을 공유/전달해 달라는 요청 (예: "저장 말고 채원한테만 공유해줘"). "저장"이라는 말이 있어도 "말고 ~한테 공유"가 핵심이면 log 가 아니라 share.
+- wrapup: 오늘 작업을 마무리하겠다는 발화 (예: "오늘은 여기까지만 할게", "이만 할게"). 저장 요청이 명시돼 있으면 log.
 - background: 자기(팀원)의 경험·관심·강점을 소개하거나 진술 (예: "나는 데이터 분석 경험이 있어")
 - topic: 주제/아이디어 후보를 제안해 달라고 "명시적으로" 요청할 때만
 - advice: 이미 정해진 특정 할 일(작업)을 어떻게 시작·진행하면 좋을지 방법이나 방향을 물어봄 (예: "○○ 데이터 수집해야 하는데 어떻게 시작하면 좋을까?")
-- plan: 준비 계획·일정·역할 분담을 요청
+- plan: 준비 계획·일정·역할 분담을 요청. 이미 세운 계획의 수정·조정 요청도 포함 (예: "1주차 줄여줘", "계획 다시 짜줘")
 - recommend: 아직 안 정한 "새 공모전"을 찾아/추천해 달라는 요청 (예: "공모전 추천해줘", "마케팅 관련 공모전 찾아줘")
 - progress: (개인) 지금까지의 진행 상황·진척도를 물어봄
 - teamstatus: 팀 전체(팀원별)가 각각 무엇을 했는지 실행 현황을 물어봄 (예: "팀 전체 진행 현황 알려줘", "누가 뭐 했어?")
@@ -402,11 +1069,17 @@ def _handle_plan(
     """확정 주제·팀원 배경·공모전 마감을 참고해 주차별 계획을 LLM 으로 뽑아
     여러 개의 ``Task`` (week_no 포함)로 워크스페이스에 저장한다. (S-01 STEP05)
 
-    LLM 실패/파싱 실패 시엔 메시지 전체를 할 일 1개로 저장하는 폴백을 쓴다.
+    이미 계획이 있으면 "추가"가 아니라 "교체"한다: 미완료(todo) 할 일을 지우고
+    기존 계획+수정 요청을 반영한 새 계획으로 갈아끼운다(완료된 할 일은 보존).
+    LLM 실패/파싱 실패 시엔 기존 계획을 건드리지 않는다(첫 계획일 때만
+    메시지 전체를 할 일 1개로 저장하는 폴백).
     """
     workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
     if workspace_id is None:
-        return "이 대화는 아직 워크스페이스에 연결돼 있지 않아요. 먼저 워크스페이스를 만들어 주세요."
+        return (
+            "아직 연결된 워크스페이스가 없어요. "
+            "공모전을 정해 워크스페이스부터 만들면 이어서 도와드릴 수 있어요 — 준비 중인 공모전이 있나요?"
+        )
 
     # 맥락 수집: 확정 주제(role=topic), 팀원 배경, 공모전 마감.
     history = load_history(conversation_id, session_factory=session_factory)
@@ -420,46 +1093,126 @@ def _handle_plan(
     )
     deadline = _load_deadline(workspace_id, tools, session_factory=session_factory)
 
+    if session_factory is None:
+        session_factory = _default_session_factory()
+
+    # 팀원을 먼저 보장해 이름 목록을 확보한다 — 담당자는 LLM 이 계획에서 직접
+    # 지정한다(제목 속 이름과 라운드로빈 배정이 어긋나는 문제 방지).
+    with session_factory() as session:
+        ws = session.get(Workspace, workspace_id)
+        owner_id = ws.owner_id
+        member_ids = _ensure_team_members(session, workspace_id, owner_id)
+        # 표시 이름의 첫 토큰("동영 (팀장)" → "동영")을 매칭 키로 쓴다.
+        name_by_id = {
+            uid: ((session.get(User, uid).name or f"팀원{uid}").split()[0])
+            for uid in member_ids
+        }
+        session.commit()
+    id_by_name = {name: uid for uid, name in name_by_id.items()}
+
+    # 기존 계획 파악 — 있으면 이번 요청은 "수정"이고, 미완료 할 일은 새 계획으로 교체한다.
+    with session_factory() as session:
+        existing = (
+            session.execute(
+                select(Task)
+                .where(Task.workspace_id == workspace_id)
+                .order_by(Task.week_no.asc(), Task.id.asc())
+            )
+            .scalars()
+            .all()
+        )
+        prev_todo_ids = [t.id for t in existing if t.status != "done"]
+        prev_plan_text = "\n".join(
+            f"{t.week_no or 1}주차 | {name_by_id.get(t.assignee_id, '미정')} | {t.title}"
+            for t in existing
+            if t.status != "done"
+        )
+        done_titles = [t.title for t in existing if t.status == "done"]
+
+    # 계획의 재료(주제·배경·마감·기존 계획)가 하나도 없으면 일반론을 지어내지 말고
+    # 먼저 묻는다(참여 유도).
+    if not existing and not topic and not backgrounds and not deadline:
+        return (
+            "계획을 짜기 전에 재료가 조금 필요해요. 어떤 공모전(또는 주제)을 준비하시나요? "
+            "팀원들의 경험·강점도 알려주시면 역할 분담까지 함께 잡아 드릴게요."
+        )
+
+    revise_block = ""
+    if prev_plan_text:
+        done_block = (
+            "\n이미 완료된 할 일 (새 계획에 다시 넣지 마세요):\n"
+            + "\n".join(f"- {t}" for t in done_titles)
+            if done_titles
+            else ""
+        )
+        revise_block = f"""
+
+[기존 계획 — 아직 미완료]
+{prev_plan_text}
+{done_block}
+[수정 요청]
+{last_user_msg}
+
+기존 계획을 수정 요청에 맞게 고친 "전체 계획"을 출력하세요. 그대로 유지할 항목도 빠짐없이 다시 출력해야 합니다."""
+
+    members_line = ", ".join(id_by_name)
     prompt = f"""당신은 공모전 팀의 준비 일정을 짜는 코치입니다.
 
 확정 주제: {topic or "아직 미정"}
 공모전 마감: {deadline or "미정"}
+팀원(담당자 후보): {members_line}
 팀원 배경(강점):
 {backgrounds or "- (아직 입력된 배경 없음)"}
 
 마감까지 4주 내외의 주차별 준비 계획을 세우세요.
 - 각 주차에 팀이 수행할 구체적 할 일을 여러 개 나열합니다.
-- 팀원 배경(강점)에 맞게 역할이 드러나도록 작성합니다.
+- 담당자는 반드시 위 "팀원(담당자 후보)" 목록의 이름 중 하나만 씁니다.
+- 팀원 배경(강점)에 맞는 사람에게 배분하되, 특정 팀원에게 일이 몰리지 않게 하세요.
+- 할 일 제목에는 사람 이름을 넣지 마세요 — 담당은 담당자 칸으로만 표현합니다.
+- 두 명이 함께 하는 일은 한 줄로 쓰지 말고, 각자 맡을 몫으로 줄을 나눠 쓰세요.
 - 반드시 아래 형식으로 "한 줄에 하나씩"만 출력하고, 다른 설명·머리말은 쓰지 마세요.
 
-<주차숫자>주차 | <할 일 제목>
+<주차숫자>주차 | <담당자> | <할 일 제목>
 
 예시:
-1주차 | 공모전 요강·심사기준 정리
-1주차 | 2030 소비 트렌드 데이터 수집
-2주차 | SNS 반응률-구매 전환율 교차 분석
-3주차 | 전략 수립 및 문서화
-4주차 | 검토·수정 후 최종 제출"""
+1주차 | {list(id_by_name)[0]} | 공모전 요강·심사기준 정리
+1주차 | {list(id_by_name)[min(1, len(id_by_name) - 1)]} | 2030 소비 트렌드 데이터 수집
+2주차 | {list(id_by_name)[min(2, len(id_by_name) - 1)]} | SNS 반응률-구매 전환율 교차 분석
+3주차 | {list(id_by_name)[min(3, len(id_by_name) - 1)]} | 전략 수립 및 문서화
+4주차 | {list(id_by_name)[0]} | 검토·수정 후 최종 제출{revise_block}"""
 
     try:
         raw = (llm or GeminiClient()).generate(prompt)
-        plan = _parse_plan(raw)
+        plan = _parse_plan(raw, id_by_name=id_by_name)
     except Exception:
         plan = []
 
     if not plan:
-        # 폴백: LLM 실패 시 메시지 전체를 할 일 1개로.
+        if prev_todo_ids:
+            # 수정 생성에 실패했으면 기존 계획을 지우지 않고 그대로 둔다.
+            return "지금은 계획을 수정하지 못했어요. 잠시 후 다시 요청해 주시겠어요?"
+        # 폴백: 첫 계획인데 LLM 실패 시 메시지 전체를 할 일 1개로.
         plan = [TaskIn(title=last_user_msg[:200] or "계획 정리", week_no=1)]
 
-    saved = tools["create_tasks"](workspace_id=workspace_id, tasks=plan)
+    # 교체: 미완료 할 일 삭제(완료된 할 일은 작업 기록이므로 보존).
+    replaced = 0
+    if prev_todo_ids:
+        with session_factory() as session:
+            rows = (
+                session.execute(select(Task).where(Task.id.in_(prev_todo_ids)))
+                .scalars()
+                .all()
+            )
+            for t in rows:
+                session.delete(t)
+            replaced = len(rows)
+            session.commit()
 
-    # [데모] 팀원을 보장하고 방금 만든 할 일을 4명에게 배정한다(주차별로 A/B/C/D 고르게).
-    # (완료율은 각자 작업/시뮬레이션으로 채워지며, 여기선 배정만 한다.)
-    if session_factory is None:
-        session_factory = _default_session_factory()
+    tools["create_tasks"](workspace_id=workspace_id, tasks=plan)
+
+    # 담당자가 안 정해진 할 일만 라운드로빈으로 채운다(정상 경로에선 LLM 이
+    # 계획에서 직접 지정하므로, 여기는 구형식 출력·이름 매칭 실패의 폴백).
     with session_factory() as session:
-        ws = session.get(Workspace, workspace_id)
-        member_ids = _ensure_team_members(session, workspace_id, ws.owner_id)
         tasks_rows = (
             session.execute(
                 select(Task)
@@ -469,15 +1222,20 @@ def _handle_plan(
             .scalars()
             .all()
         )
-        # 주차 순서로 정렬된 할 일에 전역 라운드로빈으로 배정한다. 주당 할 일 수가
-        # 팀원 수보다 적어도(예: 주 3개) 전체에 걸쳐 A/B/C/D 모두 고르게 받도록 보장한다.
         unassigned = [t for t in tasks_rows if t.assignee_id is None]
         for i, t in enumerate(unassigned):
             t.assignee_id = member_ids[i % len(member_ids)]
         session.flush()
 
+        # 최종 배정 결과(담당자 이름 포함)로 응답을 만든다.
+        entries = [
+            (t.week_no, t.title, name_by_id.get(t.assignee_id))
+            for t in tasks_rows
+            if t.status != "done"
+        ]
+
         # [S-01 STEP05] 배분받은 팀원(owner 제외)에게 알림 → 각자 화면에 자동 반영됨을 알린다.
-        owner = session.get(User, ws.owner_id)
+        owner = session.get(User, owner_id)
         owner_name = owner.name if owner and owner.name else "팀장"
         for uid in member_ids[1:]:
             cnt = sum(1 for t in tasks_rows if t.assignee_id == uid)
@@ -486,37 +1244,68 @@ def _handle_plan(
                     session,
                     workspace_id,
                     [uid],
-                    f"{owner_name}님이 주차별 계획을 세우고 할 일을 나눴어요 — 내 담당 {cnt}개",
+                    (
+                        f"{owner_name}님이 계획을 조정했어요 — 내 담당 {cnt}개"
+                        if replaced
+                        else f"{owner_name}님이 주차별 계획을 세우고 할 일을 나눴어요 — 내 담당 {cnt}개"
+                    ),
                 )
         session.commit()
 
-    return _format_plan_reply(saved)
+    return _format_plan_reply(entries, replaced=replaced, kept_done=len(done_titles))
 
 
-def _parse_plan(raw: str) -> list[TaskIn]:
-    """LLM 출력("N주차 | 할 일")을 파싱해 week_no 가 채워진 TaskIn 리스트로 만든다."""
+def _parse_plan(raw: str, *, id_by_name: dict[str, int] | None = None) -> list[TaskIn]:
+    """LLM 출력("N주차 | 담당자 | 할 일")을 파싱해 TaskIn 리스트로 만든다.
+
+    담당자 칸이 없는 구형식("N주차 | 할 일")이나 팀원과 매칭 안 되는 이름은
+    ``assignee_id=None`` 으로 두고, 호출부의 라운드로빈 폴백이 채운다.
+    """
     plan: list[TaskIn] = []
     for line in raw.splitlines():
-        m = re.match(r"^\s*(\d+)\s*주차\s*[|:\-–]\s*(.+?)\s*$", line)
-        if not m:
-            continue
-        title = m.group(2).strip(" -•*").strip()
+        assignee_id = None
+        m = re.match(r"^\s*(\d+)\s*주차\s*\|\s*([^|]+?)\s*\|\s*(.+?)\s*$", line)
+        if m:
+            week, assignee_raw, title = int(m.group(1)), m.group(2), m.group(3)
+            if id_by_name:
+                tokens = re.findall(r"[가-힣A-Za-z0-9]+", assignee_raw)
+                if tokens:
+                    assignee_id = id_by_name.get(tokens[0])
+        else:
+            m = re.match(r"^\s*(\d+)\s*주차\s*[|:\-–]\s*(.+?)\s*$", line)
+            if not m:
+                continue
+            week, title = int(m.group(1)), m.group(2)
+        title = title.strip(" -•*").strip()
         if title:
-            plan.append(TaskIn(title=title[:200], week_no=int(m.group(1))))
+            plan.append(TaskIn(title=title[:200], week_no=week, assignee_id=assignee_id))
         if len(plan) >= 16:  # 폭주 방지
             break
     return plan
 
 
-def _format_plan_reply(saved) -> str:
-    """저장된 Task 들을 주차별로 묶어 사람이 읽기 좋은 응답으로 만든다."""
+def _format_plan_reply(
+    entries: list[tuple[int | None, str, str | None]],
+    *,
+    replaced: int = 0,
+    kept_done: int = 0,
+) -> str:
+    """(주차, 제목, 담당자 이름) 목록을 주차별로 묶어 사람이 읽기 좋은 응답으로 만든다."""
     by_week: dict[int, list[str]] = {}
-    for t in saved:
-        by_week.setdefault(t.week_no or 0, []).append(t.title)
-    lines = ["주차별 계획을 워크스페이스 할 일로 저장했어요."]
+    for week, title, assignee in entries:
+        line = f"- {title}" + (f" — {assignee}" if assignee else "")
+        by_week.setdefault(week or 0, []).append(line)
+    if replaced:
+        head = f"기존 미완료 할 일 {replaced}개를 새 계획으로 교체했어요."
+        if kept_done:
+            head += f" (완료된 {kept_done}개는 그대로 뒀어요)"
+    else:
+        head = "주차별 계획을 워크스페이스에 저장했어요."
+    lines = [head]
     for wk in sorted(by_week):
         lines.append(f"\n[{wk}주차]" if wk else "\n[기타]")
-        lines.extend(f"- {title}" for title in by_week[wk])
+        lines.extend(by_week[wk])
+    lines.append("\n조정하고 싶은 주차나 배분이 있나요? 말씀해 주시면 바로 반영할게요.")
     return "\n".join(lines)
 
 
@@ -547,6 +1336,7 @@ def _handle_create_workspace(
     last_user_msg: str,
     *,
     session_factory: Callable[[], Session] | None = None,
+    llm: LLMClient | None = None,
 ) -> str:
     """대화에서 "워크스페이스 만들어줘" 요청을 받아 워크스페이스를 만들고
     현재 대화에 연결한다. (S-01 STEP03)
@@ -562,8 +1352,10 @@ def _handle_create_workspace(
         session_factory = _default_session_factory()
 
     # 메시지에 순번/이름이 있으면 직전 추천 목록에서 그 공모전을 찾는다.
-    contest_id, contest_title, ambiguous = _extract_contest(
-        last_user_msg, conversation_id, session_factory=session_factory
+    # "국가데이터 활용대회로 하자" → "워크스페이스 만들어 줘"처럼 선택이 앞 턴에
+    # 있었던 경우까지 커버하도록 최근 선택 발화도 함께 본다.
+    contest_id, contest_title, ambiguous = _extract_contest_with_context(
+        last_user_msg, conversation_id, session_factory=session_factory, llm=llm
     )
     if ambiguous:
         return "어떤 공모전인지 정확히 특정하지 못했어요. 순번이나 공모전 이름으로 다시 말씀해 주시겠어요?"
@@ -575,10 +1367,7 @@ def _handle_create_workspace(
         if conv.workspace_id is not None:
             ws = session.get(Workspace, conv.workspace_id)
             name = ws.name if ws else "워크스페이스"
-            return (
-                f"이미 '{name}' 워크스페이스에 연결돼 있어요. "
-                "'계획 짜줘'로 할 일을 나누거나 '진행 상황 알려줘'로 진척도를 확인해 보세요."
-            )
+            return f"이미 '{name}' 워크스페이스에 연결돼 있어요. 이어서 무엇을 도와드릴까요?"
 
         name = contest_title or _workspace_name_from(last_user_msg)
         ws = Workspace(name=name, owner_id=user_id, contest_id=contest_id)
@@ -610,8 +1399,8 @@ def _handle_create_workspace(
 
     linked = f"'{name}' 공모전에 맞춘 " if contest_id is not None else f"'{name}' "
     return (
-        f"{linked}워크스페이스를 만들고 이 대화에 연결했어요. 팀원들에게 알림도 보냈어요. "
-        "이제 '주제 후보 제안해줘', '계획 짜줘', '진행 상황 알려줘'를 이어서 해보세요."
+        f"{linked}워크스페이스를 만들고 팀원들에게 알렸어요. "
+        "주제를 잡으려면 팀원들의 경험·강점이 필요한데, 각자 어떤 걸 잘하는지 들려주시겠어요?"
     )
 
 
@@ -634,12 +1423,30 @@ def _handle_workspace_edit(
 
     workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
     if workspace_id is None:
-        return "이 대화는 아직 워크스페이스에 연결돼 있지 않아요. 먼저 워크스페이스를 만들어 주세요."
+        # 워크스페이스가 없는데 메시지가 공모전을 가리키면(LLM 이 선택 발화를 wsedit
+        # 으로 오분류한 경우 등) 거절 대신 생성을 제안한다.
+        offer = _handle_select(
+            conversation_id, last_user_msg, session_factory=session_factory, llm=llm
+        )
+        if offer is not None:
+            return offer
+        return (
+            "아직 연결된 워크스페이스가 없어요. "
+            "공모전을 정해 워크스페이스부터 만들면 이어서 도와드릴 수 있어요 — 준비 중인 공모전이 있나요?"
+        )
 
     new_name = _extract_new_workspace_name(last_user_msg, llm=llm)
     contest_id, contest_title, ambiguous = _extract_contest(
         last_user_msg, conversation_id, session_factory=session_factory
     )
+    if new_name is None and contest_id is None and not ambiguous:
+        # "지금 공모전 연결해줘"처럼 지시어만 있는 요청은 규칙(순번/이름)으로 못
+        # 푼다 — 최근 대화에서 다루던 공모전을 LLM 으로 해석한다.
+        history = load_history(conversation_id, session_factory=session_factory)
+        contest_id, contest_title, ambiguous = _resolve_contest_by_llm(
+            last_user_msg, conversation_id, history,
+            llm=llm, session_factory=session_factory,
+        )
     if ambiguous:
         return "어떤 공모전으로 바꿀지 정확히 특정하지 못했어요. 순번이나 공모전 이름으로 다시 말씀해 주시겠어요?"
     if new_name is None and contest_id is None:
@@ -693,6 +1500,134 @@ def _extract_new_workspace_name(text: str, *, llm: LLMClient | None = None) -> s
     if not name or name == "없음":
         return None
     return name[:200]
+
+
+def _handle_select(
+    conversation_id: int,
+    last_user_msg: str,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+    llm: LLMClient | None = None,
+) -> str | None:
+    """추천 목록에서 하나를 고르는 발화("1번으로 할게")를 받아 다음 행동을 제안한다.
+
+    예전엔 이런 선택 발화가 어떤 인텐트에도 안 걸려 study 로 새면서 워크스페이스
+    생성으로 이어지지 못했다(생성 트리거 공백). 여기서 선택을 확인해 주고
+    워크스페이스 생성(또는 이미 있으면 공모전 재연결)을 제안한다. 실제 실행은
+    사용자가 수락하면 ``_accepted_offer_intent`` 가 workspace/wsedit 으로 잇는다.
+
+    Returns:
+        답변 텍스트. 참조할 추천 목록 자체가 없으면 None (호출부가 study 폴백).
+    """
+    # 주제 후보 목록이 추천 목록보다 최신이면 이 선택은 공모전이 아니라 주제 확정이다.
+    if _topic_is_latest(conversation_id, session_factory=session_factory):
+        return (
+            "좋아요, 그 주제로 확정할게요. 이제 마감까지의 주차별 계획을 짜 볼까요? "
+            "팀원별 역할 분담까지 같이 정리해 드려요."
+        )
+
+    contest_id, contest_title, ambiguous = _extract_contest(
+        last_user_msg, conversation_id, session_factory=session_factory
+    )
+    if contest_id is None and not ambiguous:
+        # "이걸로 할게"처럼 지시어만 있는 선택은 규칙으로 못 푼다 — 대화 맥락으로 해석.
+        history = load_history(conversation_id, session_factory=session_factory)
+        contest_id, contest_title, ambiguous = _resolve_contest_by_llm(
+            last_user_msg, conversation_id, history,
+            llm=llm, session_factory=session_factory,
+        )
+    if ambiguous:
+        return "몇 번을 고르신 건지 정확히 모르겠어요. 순번이나 공모전 이름으로 다시 말씀해 주시겠어요?"
+    if contest_id is None:
+        return None
+
+    workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
+    if workspace_id is None:
+        return (
+            f"'{contest_title}'로 정하셨네요, 좋은 선택이에요. "
+            "팀원들과 준비를 시작하도록 이 공모전으로 워크스페이스를 만들까요?"
+        )
+
+    if session_factory is None:
+        session_factory = _default_session_factory()
+    with session_factory() as session:
+        ws = session.get(Workspace, workspace_id)
+        ws_name = ws.name if ws else "워크스페이스"
+        already_linked = ws is not None and ws.contest_id == contest_id
+    if already_linked:
+        return f"'{contest_title}'는 이미 '{ws_name}' 워크스페이스에 연결돼 있어요. 이어서 무엇을 도와드릴까요?"
+    return (
+        f"'{contest_title}'로 정하셨네요. "
+        f"지금 '{ws_name}' 워크스페이스의 공모전을 이걸로 바꿔 연결할까요?"
+    )
+
+
+def _topic_is_latest(
+    conversation_id: int,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+) -> bool:
+    """이 대화에서 주제 후보(topic)가 추천 목록(recommend)보다 나중에 제시됐는지."""
+    history = load_history(conversation_id, session_factory=session_factory)
+    latest = next(
+        (m.role for m in reversed(history) if m.role in ("topic", "recommend")), None
+    )
+    return latest == "topic"
+
+
+def _handle_workspace_info(
+    conversation_id: int,
+    tools: dict,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+) -> str:
+    """연결된 워크스페이스의 현황(공모전·팀원·할 일 진행)을 요약해 보여준다."""
+    workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
+    if workspace_id is None:
+        return (
+            "아직 이 대화에 연결된 워크스페이스가 없어요. "
+            "공모전을 추천받아 고르시면 바로 만들어 드릴게요 — 어떤 분야에 관심 있으세요?"
+        )
+
+    if session_factory is None:
+        session_factory = _default_session_factory()
+    with session_factory() as session:
+        ws = session.get(Workspace, workspace_id)
+        if ws is None:
+            return "워크스페이스를 찾을 수 없어요. 잠시 후 다시 시도해 주세요."
+        ws_name = ws.name
+        members = session.execute(
+            select(User.name)
+            .join(WorkspaceMember, WorkspaceMember.user_id == User.id)
+            .where(WorkspaceMember.workspace_id == workspace_id)
+            .order_by(WorkspaceMember.id.asc())
+        ).scalars().all()
+        tasks_rows = session.execute(
+            select(Task.status).where(Task.workspace_id == workspace_id)
+        ).scalars().all()
+
+    contest = _load_contest_brief(workspace_id, tools, session_factory=session_factory)
+    if contest is not None:
+        deadline = getattr(contest, "deadline", None)
+        contest_line = f"{contest.title}" + (f" (마감 {deadline})" if deadline else "")
+    else:
+        contest_line = "아직 연결 안 됨"
+
+    total = len(tasks_rows)
+    done = sum(1 for s in tasks_rows if s == "done")
+    task_line = (
+        f"{done}/{total}개 완료 ({round(done / total * 100)}%)" if total else "아직 없음"
+    )
+
+    lines = [
+        f"'{ws_name}' 워크스페이스 현황이에요.",
+        f"- 공모전: {contest_line}",
+        f"- 팀원 {len(members)}명: {', '.join(members)}" if members else "- 팀원: 아직 없음",
+        f"- 할 일: {task_line}",
+        "",
+        "이름을 바꾸거나 다른 공모전으로 다시 연결할 수도 있어요. 조정할 게 있나요?",
+    ]
+    return "\n".join(lines)
 
 
 def _notify_members(
@@ -767,21 +1702,130 @@ def _extract_contest(
             return entry["id"], entry["title"], False
         return None, None, True
 
+    # "두 번째"처럼 표준 띄어쓰기가 들어오면 "두번째" 키에 안 걸리므로,
+    # 공백을 걷어낸 문자열 기준으로 매칭한다.
+    compact = text.replace(" ", "")
     for word, n in _ORDINAL_WORDS.items():
-        if word in text and n <= len(entries):
+        if word in compact and n <= len(entries):
             entry = entries[n - 1]
             return entry["id"], entry["title"], False
 
-    words = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", text))
+    # 제목 단어가 메시지 안에 "부분문자열"로 있는지 센다. 토큰 집합 교집합 방식은
+    # "국가데이터 활용대회로 하자"처럼 조사가 붙으면("활용대회로") 매칭이 깨진다.
     best, best_score = None, 0
     for entry in entries:
-        overlap = len(words & set(re.findall(r"[가-힣A-Za-z0-9]{2,}", entry["title"])))
+        title_tokens = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", entry["title"]))
+        overlap = sum(1 for tok in title_tokens if tok in text)
         if overlap > best_score:
             best, best_score = entry, overlap
     if best is not None:
         return best["id"], best["title"], False
 
     return None, None, False
+
+
+def _extract_contest_with_context(
+    text: str,
+    conversation_id: int,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+    llm: LLMClient | None = None,
+) -> tuple[int | None, str | None, bool]:
+    """현재 메시지에서 공모전을 못 찾으면 최근 대화 맥락까지 동원해 찾는다.
+
+    1차(규칙): 현재 메시지의 순번/제목 → 과거 선택 발화("국가데이터 활용대회로
+    하자")의 순번/제목. 명확한 발화는 LLM 없이 결정적으로 처리한다.
+    2차(LLM): "아니 이거 준비하려고 하는데 워크스페이스 만들어줘"처럼 지시어로만
+    가리키는 발화는 규칙으로 못 푼다. 최근 대화와 추천 목록을 LLM에 주고 무엇을
+    가리키는지 해석시킨다(``_resolve_contest_by_llm``). LLM 실패 시 미연결 폴백.
+    """
+    result = _extract_contest(text, conversation_id, session_factory=session_factory)
+    if result[0] is not None or result[2]:
+        return result
+
+    history = load_history(conversation_id, session_factory=session_factory)
+    user_msgs = [m.content for m in history if m.role == "user"]
+    for msg in reversed(user_msgs[-5:]):
+        if msg == text:
+            continue
+        if _classify_intent_by_keyword(msg)["intent"] != "select":
+            continue
+        rid, rtitle, ambiguous = _extract_contest(
+            msg, conversation_id, session_factory=session_factory
+        )
+        if rid is not None and not ambiguous:
+            return rid, rtitle, False
+
+    return _resolve_contest_by_llm(
+        text, conversation_id, history, llm=llm, session_factory=session_factory
+    )
+
+
+def _resolve_contest_by_llm(
+    text: str,
+    conversation_id: int,
+    history: list[MessageOut],
+    *,
+    llm: LLMClient | None = None,
+    session_factory: Callable[[], Session] | None = None,
+) -> tuple[int | None, str | None, bool]:
+    """"이거/그 대회" 같은 지시 표현이 가리키는 공모전을 최근 대화 맥락으로 해석한다.
+
+    추천/검색 기록(순번↔id↔제목)에 있는 공모전만 후보로 준다 — 목록 밖 id 를
+    답하면(환각) 버린다. LLM 호출 실패 시 (None, None, False) 로 조용히 폴백해
+    기존 규칙 기반 흐름과 동일하게 동작한다.
+
+    Returns:
+        (contest_id, 제목, 모호함여부). 대화에 근거가 없으면 (None, None, False),
+        여러 개와 헷갈리면 (None, None, True) — 호출부가 되묻는다.
+    """
+    entries = competition_agent.load_latest_recommend_list(
+        conversation_id, session_factory=session_factory
+    )
+    if not entries:
+        return None, None, False
+
+    recent = [m for m in history if m.role in ("user", "assistant")][-8:]
+    convo = "\n".join(
+        f"{'사용자' if m.role == 'user' else '어시스턴트'}: {m.content[:300]}"
+        for m in recent
+    )
+    listing = "\n".join(f"- id={e['id']}: {e['title']}" for e in entries)
+    prompt = f"""아래는 공모전 도우미와 사용자의 최근 대화, 그리고 대화에서 다뤄진 공모전 목록입니다.
+사용자의 마지막 메시지가 목록 중 어느 공모전을 가리키는지 판단하세요.
+"이거", "그 대회", "아까 그거"처럼 지시어만 있으면 직전 대화에서 다루던 공모전을 뜻합니다.
+
+[공모전 목록]
+{listing}
+
+[최근 대화]
+{convo}
+
+[사용자의 마지막 메시지]
+{text}
+
+규칙:
+- 가리키는 공모전이 분명하면 그 id 숫자 하나만 출력하세요.
+- 대화에 근거가 없거나 어떤 공모전도 가리키지 않으면 '없음'만 출력하세요.
+- 두 개 이상 중 무엇인지 확실하지 않으면 '모호'만 출력하세요.
+
+답:"""
+
+    try:
+        raw = (llm or GeminiClient()).generate(prompt).strip()
+    except Exception:  # noqa: BLE001 - LLM 실패 시 규칙 기반 결과(미연결)로 폴백
+        return None, None, False
+
+    if "모호" in raw:
+        return None, None, True
+    id_match = re.search(r"\d+", raw)
+    if id_match is None:
+        return None, None, False
+    cid = int(id_match.group())
+    entry = next((e for e in entries if e["id"] == cid), None)
+    if entry is None:
+        return None, None, False
+    return entry["id"], entry["title"], False
 
 
 def _workspace_name_from(text: str) -> str:
@@ -799,9 +1843,21 @@ def _workspace_name_from(text: str) -> str:
     return cleaned[:200] if len(cleaned) >= 2 else "새 워크스페이스"
 
 
+# 부분 저장("이 부분만")·병합("합쳐줘") 요청을 구분하는 수식어. (S-02 STEP02 케이스)
+_PARTIAL_SAVE_MARKERS = ("이 부분만", "이것만", "여기만", "요 부분만", "부분만 저장")
+_MERGE_MARKERS = ("합쳐", "합치", "병합")
+# 부분 저장 범위를 되묻는 질문. _CONTINUATION_MARKERS("어느 부분부터 어느 부분까지
+# 저장할까요" → log)와 짝이므로 문구를 바꾸면 거기도 같이 바꿔야 한다.
+_RANGE_QUESTION = (
+    "네, 어느 부분부터 어느 부분까지 저장할까요? "
+    "예: '데이터 수집 얘기부터 SNS 분석까지'처럼 알려주세요."
+)
+
+
 def _handle_log(
     conversation_id: int,
     user_id: int,
+    last_user_msg: str = "",
     *,
     session_factory: Callable[[], Session] | None = None,
     llm: LLMClient | None = None,
@@ -809,43 +1865,58 @@ def _handle_log(
     """오늘 진행한 작업 대화를 요약해 실행 로그(``Message(role="log")``)로 저장하고,
     내용과 관련된 할 일(Task)을 완료 처리한다. (S-02 STEP02)
 
+    - "이 부분만 저장해줘" → 저장하지 않고 범위를 되묻는다. 범위 답변은
+      ``_CONTINUATION_MARKERS`` 가 다시 log 로 이어준다.
+    - "지난번에 저장한 거랑 합쳐줘" → 이전 로그와 병합한 미리보기를 보여주고
+      확정("이대로 저장할까요?" → logmerge)을 기다린다.
     - 요약/키워드 생성은 LLM. 실패 시 최근 사용자 발화로 폴백.
-    - 실행 로그는 새 테이블 없이 role="log" 메시지로 저장(스키마 재사용).
-    - 완료 처리는 로그 내용과 제목이 가장 많이 겹치는 todo Task 를 done 으로.
+    - 요약 대상은 "마지막 실행 로그 저장 이후"의 대화만(지난 저장분 중복 방지).
+    - 완료 처리는 겹침이 뚜렷한(단어 2개 이상) todo Task 만 자동으로, 애매하면
+      되묻는다("완료 처리할까요?" → taskdone).
     """
     workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
     if workspace_id is None:
-        return "이 대화는 아직 워크스페이스에 연결돼 있지 않아요. 먼저 워크스페이스를 만들어 주세요."
+        return (
+            "아직 연결된 워크스페이스가 없어요. "
+            "공모전을 정해 워크스페이스부터 만들면 이어서 도와드릴 수 있어요 — 준비 중인 공모전이 있나요?"
+        )
+
+    # 부분 저장 요청인데 범위를 모르면 먼저 묻는다(전체를 덜컥 저장하지 않는다).
+    if any(k in last_user_msg for k in _PARTIAL_SAVE_MARKERS):
+        return _RANGE_QUESTION
 
     history = load_history(conversation_id, session_factory=session_factory)
-    convo = [m for m in history if m.role in ("user", "assistant") and m.content.strip()]
-    # 마지막 user 메시지(= "저장해줘" 명령 자체)는 요약 대상에서 제외.
-    if convo and convo[-1].role == "user":
-        convo = convo[:-1]
-    convo = convo[-20:]
+    # 직전에 범위를 물었다면 이번 메시지가 그 범위 지정이다.
+    last_assistant = next(
+        (m.content for m in reversed(history) if m.role == "assistant"), ""
+    )
+    range_spec = (
+        last_user_msg
+        if "어느 부분부터 어느 부분까지 저장할까요" in last_assistant
+        else None
+    )
+
+    convo = _convo_since_last_log(history)
     if not convo:
         return "저장할 작업 내용이 없어요. 먼저 오늘 한 작업을 이야기해 주세요."
 
-    convo_text = "\n".join(f"{m.role}: {m.content}" for m in convo)
-    prompt = f"""아래는 공모전 팀원이 오늘 진행한 작업 대화입니다.
-핵심 내용을 요약하고 키워드를 뽑아, 아래 형식으로만 출력하세요(다른 말 금지).
-
-요약: <오늘 한 작업의 핵심 2~3문장>
-키워드: #키워드1 #키워드2 #키워드3
-
-작업 대화:
-{convo_text}"""
-
-    try:
-        summary = (llm or GeminiClient()).generate(prompt).strip()
-    except Exception:
-        recent = [m.content for m in convo if m.role == "user"][-3:]
-        summary = "요약: " + " / ".join(recent)[:300] if recent else "요약: (내용 없음)"
+    summary = _summarize_convo(convo, range_spec=range_spec, llm=llm)
 
     if session_factory is None:
         session_factory = _default_session_factory()
 
+    merge_note = ""
+    if any(k in last_user_msg for k in _MERGE_MARKERS):
+        preview = _prepare_log_merge(
+            conversation_id, summary, session_factory=session_factory, llm=llm
+        )
+        if preview is not None:
+            return preview
+        # 합칠 이전 로그가 없으면 새 로그로 저장하되 그 사실을 알린다.
+        merge_note = "이전에 저장한 로그가 없어서 새 로그로 저장했어요.\n\n"
+
     completed_title: str | None = None
+    confirm_title: str | None = None
     with session_factory() as session:
         todos = (
             session.execute(
@@ -856,11 +1927,11 @@ def _handle_log(
             .scalars()
             .all()
         )
-        best = _best_matching_task(summary, todos)
+        best, score = _best_matching_task(summary, todos)
         # 로그 헤더로 쓸 제목: 완료 처리되는 할 일 제목(없으면 "작업 기록").
         # 실행 로그는 "제목: ...\n요약: ...\n키워드: ..." 형태로 저장한다(작성자·날짜는
         # 메시지 메타에서 읽으므로 content 엔 안 넣는다).
-        log_title = best.title if best is not None else "작업 기록"
+        log_title = best.title if best is not None and score >= 2 else "작업 기록"
         session.add(
             Message(
                 conversation_id=conversation_id,
@@ -868,26 +1939,299 @@ def _handle_log(
                 content=f"제목: {log_title}\n{summary}",
             )
         )
-        if best is not None:
+        if best is not None and score >= 2:
+            # 겹침이 뚜렷할 때만 자동 완료. 단어 1개 겹침은 오매칭이 잦아 되묻는다.
             best.status = "done"
             completed_title = best.title
+        elif best is not None and score == 1:
+            confirm_title = best.title
         session.commit()
 
-    reply = "오늘 작업을 실행 로그에 저장했어요.\n\n" + summary
+    reply = merge_note + "오늘 작업을 실행 로그에 저장했어요.\n\n" + summary
     if completed_title:
         reply += f"\n\n✅ 관련 할 일 완료 처리: {completed_title}"
+    elif confirm_title:
+        reply += f"\n\n혹시 '{confirm_title}' 할 일에 해당하는 작업이었나요? 맞으면 완료 처리할까요?"
     return reply
 
 
-def _best_matching_task(text: str, tasks: list) -> Task | None:
-    """로그 내용과 제목이 가장 많이 겹치는 todo Task 를 고른다(겹치는 단어 1개 이상일 때만)."""
+def _convo_since_last_log(history: list[MessageOut]) -> list[MessageOut]:
+    """마지막 실행 로그 저장 이후의 user/assistant 대화만 골라낸다(요약 대상 범위).
+
+    로그를 저장한 적이 없으면 전체에서 최근 20개. 마지막 user 메시지(= "저장해줘"
+    명령 자체)는 요약 대상에서 제외한다.
+    """
+    last_log_idx = next(
+        (i for i in range(len(history) - 1, -1, -1) if history[i].role == "log"), -1
+    )
+    convo = [
+        m
+        for m in history[last_log_idx + 1:]
+        if m.role in ("user", "assistant") and m.content.strip()
+    ]
+    if convo and convo[-1].role == "user":
+        convo = convo[:-1]
+    return convo[-20:]
+
+
+def _summarize_convo(
+    convo: list[MessageOut],
+    *,
+    range_spec: str | None = None,
+    llm: LLMClient | None = None,
+) -> str:
+    """작업 대화를 "요약: ...\\n키워드: ..." 형식으로 요약한다. LLM 실패 시 발화 폴백."""
+    convo_text = "\n".join(f"{m.role}: {m.content}" for m in convo)
+    range_block = (
+        f"\n\n중요: 사용자가 지정한 구간만 요약하세요 — \"{range_spec}\". "
+        "이 구간에 해당하지 않는 내용은 요약과 키워드에 넣지 마세요."
+        if range_spec
+        else ""
+    )
+    prompt = f"""아래는 공모전 팀원이 오늘 진행한 작업 대화입니다.
+핵심 내용을 요약하고 키워드를 뽑아, 아래 형식으로만 출력하세요(다른 말 금지).
+"팀원이 실제로 수행한 작업"만 요약하세요 — 저장 완료 안내, 계획 목록 출력, 워크스페이스
+설정 같은 시스템·어시스턴트 발화는 요약과 키워드에 넣지 마세요.
+
+요약: <오늘 한 작업의 핵심 2~3문장>
+키워드: #키워드1 #키워드2 #키워드3{range_block}
+
+작업 대화:
+{convo_text}"""
+
+    try:
+        return (llm or GeminiClient()).generate(prompt).strip()
+    except Exception:
+        recent = [m.content for m in convo if m.role == "user"][-3:]
+        return "요약: " + " / ".join(recent)[:300] if recent else "요약: (내용 없음)"
+
+
+def _load_latest_message(
+    session: Session, conversation_id: int, role: str
+) -> Message | None:
+    """이 대화에서 해당 role 의 가장 최근 메시지를 반환한다."""
+    return (
+        session.execute(
+            select(Message)
+            .where(Message.conversation_id == conversation_id, Message.role == role)
+            .order_by(Message.id.desc())
+        )
+        .scalars()
+        .first()
+    )
+
+
+def _prepare_log_merge(
+    conversation_id: int,
+    summary: str,
+    *,
+    session_factory: Callable[[], Session],
+    llm: LLMClient | None = None,
+) -> str | None:
+    """이전 로그와 이번 요약을 병합한 미리보기를 만들어 확정을 기다린다. (S-02 STEP02)
+
+    병합 결과는 ``role="log_draft"`` 로 저장해 두고, 사용자가 "응"으로 수락하면
+    ``_handle_log_merge_confirm`` 이 기존 로그를 이 내용으로 교체한다.
+
+    Returns:
+        미리보기 응답 텍스트. 합칠 이전 로그가 없으면 None(호출부가 일반 저장 폴백).
+    """
+    with session_factory() as session:
+        prev = _load_latest_message(session, conversation_id, "log")
+    if prev is None:
+        return None
+
+    merge_prompt = f"""아래 [기존 실행 로그]와 [새 작업 요약]을 하나의 실행 로그로 병합하세요.
+중복 내용은 합치고, 새 내용은 빠짐없이 반영하세요. 아래 형식으로만 출력하세요(다른 말 금지).
+
+제목: <병합된 로그 제목 한 줄>
+요약: <병합된 핵심 2~4문장>
+키워드: #키워드1 #키워드2 #키워드3
+
+[기존 실행 로그]
+{prev.content}
+
+[새 작업 요약]
+{summary}"""
+    try:
+        merged = (llm or GeminiClient()).generate(merge_prompt).strip()
+    except Exception:
+        merged = f"{prev.content}\n\n[추가 내용]\n{summary}"
+
+    with session_factory() as session:
+        session.add(
+            Message(conversation_id=conversation_id, role="log_draft", content=merged)
+        )
+        session.commit()
+
+    return (
+        "이전 로그와 합친 미리보기예요.\n\n"
+        f"{merged}\n\n"
+        "이대로 저장할까요? 고치고 싶은 부분이 있으면 말씀해 주세요."
+    )
+
+
+def _handle_log_merge_confirm(
+    conversation_id: int,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+) -> str:
+    """병합 미리보기("이대로 저장할까요?")를 수락하면 기존 로그를 병합본으로 교체한다."""
+    if session_factory is None:
+        session_factory = _default_session_factory()
+    with session_factory() as session:
+        draft = _load_latest_message(session, conversation_id, "log_draft")
+        if draft is None:
+            return "저장 대기 중인 병합 내용이 없어요. '오늘 작업 저장해줘'처럼 다시 요청해 주시겠어요?"
+        prev = _load_latest_message(session, conversation_id, "log")
+        if prev is not None:
+            prev.content = draft.content
+            session.delete(draft)
+        else:
+            draft.role = "log"  # 교체할 원본이 없으면 병합본을 그대로 로그로 승격.
+        session.commit()
+    return "병합한 내용으로 실행 로그를 업데이트했어요. 이어서 진행할 작업이 있나요?"
+
+
+def _handle_taskdone(
+    conversation_id: int,
+    history: list[MessageOut],
+    *,
+    session_factory: Callable[[], Session] | None = None,
+) -> str:
+    """"'OO' 할 일 완료 처리할까요?" 제안을 수락하면 그 할 일을 done 으로 바꾼다."""
+    last_assistant = next(
+        (m.content for m in reversed(history) if m.role == "assistant"), ""
+    )
+    m = re.search(r"'([^']+)' 할 일", last_assistant)
+    if m is None:
+        return "어떤 할 일을 완료 처리할지 찾지 못했어요. 할 일 이름을 말씀해 주시겠어요?"
+    return _complete_task_by_title(
+        conversation_id, m.group(1), session_factory=session_factory
+    )
+
+
+def _best_matching_task(text: str, tasks: list) -> tuple["Task | None", int]:
+    """로그 내용과 제목이 가장 많이 겹치는 todo Task 와 겹친 단어 수를 반환한다.
+
+    겹침 판단(자동 완료/되묻기/무시)은 호출부 몫이라 점수를 함께 돌려준다.
+    """
     words = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", text))
     best, best_score = None, 0
     for t in tasks:
         overlap = len(words & set(re.findall(r"[가-힣A-Za-z0-9]{2,}", t.title)))
         if overlap > best_score:
             best, best_score = t, overlap
-    return best if best_score >= 1 else None
+    return best, best_score
+
+
+def _handle_wrapup() -> str:
+    """오늘 작업을 마무리하는 발화("오늘은 여기까지만 할게")에 저장을 제안한다. (S-02 STEP01)
+
+    "실행 로그에 저장해 드릴까요" 는 ``_OFFER_MARKERS`` (→ log)와 짝이라,
+    "응" 수락이 바로 ``_handle_log`` 저장으로 이어진다.
+    """
+    return (
+        "오늘도 수고하셨어요. 지금까지 진행한 내용을 실행 로그에 저장해 드릴까요? "
+        "다음에 이어서 하실 거면 저장 없이 마무리해도 괜찮아요."
+    )
+
+
+def _handle_share(
+    conversation_id: int,
+    user_id: int,
+    last_user_msg: str,
+    *,
+    session_factory: Callable[[], Session] | None = None,
+    llm: LLMClient | None = None,
+) -> str:
+    """작업 요약을 워크스페이스(전체 공개) 대신 특정 팀원에게만 전달한다. (S-02 STEP02)
+
+    "저장 말고 C한테만 공유해줘" — 실행 로그(role="log")는 남기지 않고, 수신자의
+    워크스페이스 대화에 요약 메시지를 넣은 뒤 알림(toast)까지 보낸다.
+    """
+    workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
+    if workspace_id is None:
+        return (
+            "아직 연결된 워크스페이스가 없어서 공유할 팀원을 찾을 수 없어요. "
+            "공모전을 정해 워크스페이스부터 만들면 이어서 도와드릴 수 있어요 — 준비 중인 공모전이 있나요?"
+        )
+
+    if session_factory is None:
+        session_factory = _default_session_factory()
+
+    with session_factory() as session:
+        rows = (
+            session.execute(
+                select(User)
+                .join(WorkspaceMember, WorkspaceMember.user_id == User.id)
+                .where(WorkspaceMember.workspace_id == workspace_id)
+            )
+            .scalars()
+            .all()
+        )
+        sender = session.get(User, user_id)
+        sender_name = (sender.name if sender and sender.name else "팀원")
+        members = [(u.id, u.name or u.email) for u in rows if u.id != user_id]
+
+    # 수신자 특정: 표시 이름의 첫 토큰("동영 (팀장)" → "동영")이 메시지에 있는 팀원.
+    matches = [
+        (uid, name)
+        for uid, name in members
+        if (name or "").split() and (name or "").split()[0] in last_user_msg
+    ]
+    if len(matches) != 1:
+        names = ", ".join(name for _, name in members) or "(아직 없음)"
+        return (
+            f"누구에게 공유할까요? 지금 워크스페이스 팀원은 {names}이에요. "
+            "이름을 말씀해 주시면 그분에게만 전달할게요."
+        )
+    recipient_id, recipient_name = matches[0]
+
+    history = load_history(conversation_id, session_factory=session_factory)
+    convo = _convo_since_last_log(history)
+    if not convo:
+        return "공유할 작업 내용이 없어요. 먼저 오늘 한 작업을 이야기해 주세요."
+    summary = _summarize_convo(convo, llm=llm)
+
+    with session_factory() as session:
+        # 수신자의 워크스페이스 대화(없으면 생성)에 공유 메시지를 넣는다(_notify_members 와 동일 규약).
+        conv = (
+            session.execute(
+                select(Conversation)
+                .where(
+                    Conversation.workspace_id == workspace_id,
+                    Conversation.user_id == recipient_id,
+                )
+                .order_by(Conversation.id.asc())
+            )
+            .scalars()
+            .first()
+        )
+        if conv is None:
+            conv = Conversation(user_id=recipient_id, workspace_id=workspace_id)
+            session.add(conv)
+            session.flush()
+        session.add(
+            Message(
+                conversation_id=conv.id,
+                role="assistant",
+                content=f"📩 {sender_name}님이 작업 내용을 공유했어요.\n\n{summary}",
+            )
+        )
+        _notify_members(
+            session,
+            workspace_id,
+            [recipient_id],
+            f"{sender_name}님이 작업 내용을 공유했어요 — 채팅에서 확인해 보세요",
+        )
+        session.commit()
+
+    return (
+        f"{recipient_name}님에게만 공유했어요. 워크스페이스 실행 로그에는 저장하지 않았어요.\n\n"
+        f"{summary}\n\n"
+        "다른 팀원에게도 공유할 내용이 있나요?"
+    )
 
 
 def _handle_topic(
@@ -955,7 +2299,11 @@ def _handle_topic(
         )
         session.commit()
 
-    return candidates
+    # 후보만 던지고 끝내지 않고 사용자의 선택을 끌어낸다(참여 유도).
+    return (
+        f"{candidates}\n\n"
+        "둘 중 어느 쪽이 더 끌리나요? 좁히거나 두 후보를 섞어서 다시 제안할 수도 있어요."
+    )
 
 
 def _handle_background(
@@ -977,153 +2325,15 @@ def _handle_background(
         and m.content.strip()
         and _classify_intent_by_keyword(m.content)["intent"] in ("study", "background")
     )
+    if gathered >= 3:
+        return (
+            f"기억해뒀어요. 배경이 {gathered}개 모여서 주제를 잡기에 충분해요. "
+            "지금까지 모인 강점으로 주제 후보를 제안해 볼까요?"
+        )
     return (
-        f"좋아요, 팀원 배경으로 기억해뒀어요. (지금까지 {gathered}개) "
-        "배경이 더 모이면 '주제 후보 제안해줘'라고 말해 주세요. "
-        "여러 배경을 종합해 어울리는 공모전 주제를 제안해 드릴게요."
+        f"기억해뒀어요. (지금까지 배경 {gathered}개) "
+        "다른 팀원들은 어떤 경험이나 강점이 있나요?"
     )
-
-
-def _extract_search_keyword(history: list[MessageOut]) -> str | None:
-    """대화 전체 사용자 메시지에서 공모전 검색 키워드를 추출한다.
-
-    사용자가 여러 턴에 걸쳐 밝힌 분야·목표·조건을 합쳐 짧은 키워드로 만든다.
-    파악된 정보가 없으면 None 을 반환해 전체 검색으로 fallback 한다.
-    """
-    user_msgs = [m.content for m in history if m.role == "user"]
-    if not user_msgs:
-        return None
-
-    recent = user_msgs[-5:]  # 최근 5개 사용자 메시지
-    latest = recent[-1]
-    earlier = " / ".join(recent[:-1]) if len(recent) > 1 else "(없음)"
-    llm = GeminiClient()
-    result = llm.generate(
-        f"다음은 사용자와 공모전 도우미의 대화에서 사용자 발언만 모은 것입니다.\n"
-        f"공모전 DB 검색에 쓸 핵심 키워드를 한국어로 1~3단어만 반환하세요.\n"
-        f"분야·카테고리 위주로 추출하고, 설명 없이 키워드만 반환하세요.\n"
-        f"이전 발언에서 파악된 분야/키워드가 있으면 기본으로 사용하세요.\n"
-        f"최신 발언은 이전 조건과 명백히 충돌하거나(\"다른 분야도\", \"말고 다른 거\" 등) "
-        f"새 분야를 언급할 때만 우선 적용하세요. 최신 발언이 단순 진행 요청·의견"
-        f"(예: \"공모전부터 정해야되는거 아냐?\", \"빨리 추천해줘\")이라 분야 정보가 "
-        f"없다면 이전 발언의 키워드를 그대로 유지하세요.\n"
-        f"정말 아무 정보도 없으면 '없음'이라고만 반환하세요.\n\n"
-        f"이전 발언: {earlier}\n"
-        f"최신 발언: {latest}\n"
-        f"키워드:"
-    )
-    keyword = result.strip()
-    if not keyword or keyword == "없음":
-        return None
-    return keyword[:50]
-
-
-def _extract_search_filters(
-    history: list[MessageOut], *, llm: LLMClient | None = None
-) -> CompetitionSearchFilters:
-    """대화 전체에서 구조화된 검색 필터(분야/대상/최소상금/참여형태/취업연계/마감)를 추출한다.
-
-    사용자가 실제로 언급한 조건만 채우고 나머지는 반드시 null로 두도록 프롬프트에
-    명시한다(없는 조건을 LLM이 지어내 결과를 과도하게 걸러내는 것 방지). LLM 호출
-    실패·JSON 파싱 실패 시 빈 필터(전부 None, 즉 무필터)로 안전하게 폴백한다.
-    """
-    user_msgs = [m.content for m in history if m.role == "user"]
-    if not user_msgs:
-        return CompetitionSearchFilters()
-
-    recent = user_msgs[-5:]  # 최근 5개 사용자 메시지
-    latest = recent[-1]
-    earlier = " / ".join(recent[:-1]) if len(recent) > 1 else "(없음)"
-    today = date.today().isoformat()
-    category_options = ", ".join(KNOWN_CATEGORIES)
-    target_options = ", ".join(KNOWN_TARGETS)
-    prompt = f"""다음은 사용자와 공모전 도우미의 대화에서 사용자 발언만 모은 것입니다.
-아래 JSON 스키마에 맞춰, 사용자가 명시적으로 언급한 조건만 채우고 언급 안 된 필드는
-반드시 null 로 두세요. 설명이나 코드블록 없이 JSON 객체 하나만 출력하세요.
-
-오늘 날짜: {today} (마감일 관련 표현("이번 주까지", "이번 달 안에" 등)은 이 날짜 기준으로 계산하세요)
-
-중요: 이전 발언에서 파악된 조건은 기본으로 유지하세요. 최신 발언이 이전 조건과
-명백히 충돌하거나("다른 분야도 보여줘", "말고 다른 거", "그거 말고" 등) 새 조건을
-언급할 때만 그 필드를 null로 되돌리거나 새 값으로 교체하세요. 최신 발언이 단순
-진행 요청·의견(예: "공모전부터 정해야되는거 아냐?", "빨리 추천해줘")이라 특정
-조건에 대한 언급이 없다면, 그 필드는 이전 발언에서 파악된 값을 그대로 유지하세요.
-
-스키마:
-{{
-  "category": ["분야1", "분야2"] 또는 null,     // 반드시 다음 중에서만 골라라: {category_options}
-  "target": ["대학생", "일반인"] 또는 null,      // 반드시 다음 중에서만 골라라: {target_options}
-  "has_prize": true, false, 또는 null,          // 금액과 상관없이 "상금이 있는지"만 물었으면 true
-  "min_prize": 정수 또는 null,                  // 사용자가 구체적인 최소 금액을 언급했을 때만
-  "participation_type": "individual" 또는 "team" 또는 null,
-  "is_career_benefit": true, false, 또는 null,  // 취업·인턴 연계를 원한다고 했으면
-  "deadline_before": "YYYY-MM-DD" 또는 null      // 이 날짜 전 마감만 원하면(상대 표현은 오늘 날짜 기준 환산)
-}}
-
-이전 발언(참고용 — 최신 발언과 충돌하면 무시): {earlier}
-최신 발언(가장 중요): {latest}
-
-JSON:"""
-
-    try:
-        client = llm or GeminiClient()
-        raw = client.generate(prompt).strip()
-        raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        data = json.loads(raw)
-        filters = CompetitionSearchFilters.model_validate(data)
-    except Exception:
-        return CompetitionSearchFilters()
-
-    return filters
-
-
-def _apply_filters(
-    results: list[CompetitionDetailOut],
-    filters: CompetitionSearchFilters,
-) -> list[CompetitionDetailOut]:
-    """구조화 필터를 semantic_search 결과에 Python 레벨로 적용한다.
-
-    embeddings 는 App DB, contests 는 별도 읽기전용 DB라 SQL JOIN이 안 되므로
-    (search_competitions 와 달리) 여기서는 이미 조회된 객체를 기준으로 걸러낸다.
-    """
-
-    def keep(c: CompetitionDetailOut) -> bool:
-        if filters.participation_type == "individual" and c.participation_type not in (
-            "individual", "individual_or_team", None, "",
-        ):
-            return False
-        if filters.participation_type == "team" and c.participation_type not in (
-            "team", "individual_or_team", None, "",
-        ):
-            return False
-        if filters.category and not (set(filters.category) & set(c.category)):
-            return False
-        if (
-            filters.target
-            and TARGET_NO_RESTRICTION not in c.target
-            and not (set(filters.target) & set(c.target))
-        ):
-            # "대상 제한 없음"이면 누구나 지원 가능하다는 뜻이라 target 필터를 걸지 않는다.
-            return False
-        if filters.has_prize is True:
-            prize = c.total_prize_amount or c.first_prize_amount or 0
-            if prize <= 0:
-                return False
-        if filters.has_prize is False:
-            prize = c.total_prize_amount or c.first_prize_amount or 0
-            if prize > 0:
-                return False
-        if filters.min_prize is not None:
-            prize = c.total_prize_amount or c.first_prize_amount or 0
-            if prize < filters.min_prize:
-                return False
-        if filters.is_career_benefit is not None and c.is_career_benefit != filters.is_career_benefit:
-            return False
-        if filters.deadline_before is not None and c.deadline and c.deadline >= filters.deadline_before:
-            return False
-        return True
-
-    return [c for c in results if keep(c)]
 
 
 def _handle_recommend(
@@ -1140,8 +2350,35 @@ def _handle_recommend(
     DB 고유번호는 노출하지 않는다 — 대신 ``Message(role="recommend")`` 로 순번↔id↔제목
     매핑을 저장해, 이후 "1번으로 워크스페이스 만들어줘" 같은 요청을 해석할 수 있게 한다.
     """
-    search_keyword = _extract_search_keyword(history)
-    filters = _extract_search_filters(history)
+    # 마감 여유를 원하는 재검색("마감 촉박한데 다른 거 없어?")인데 필요한 준비 기간을
+    # 모르면, 검색 대신 기간부터 되묻는다(S-01 STEP01 케이스). 사용자의 답변은
+    # _CONTINUATION_MARKERS 가 다시 recommend 로 이어준다.
+    if ("촉박" in last_user_msg or "여유" in last_user_msg) and not re.search(
+        r"\d|[일이삼사오]\s*(?:주|달|개월)|한\s*달", last_user_msg
+    ):
+        return (
+            "준비 기간이 얼마나 필요해요? '3주는 필요해'처럼 알려주시면 "
+            "그 기간을 확보할 수 있는 공모전으로 다시 찾아볼게요."
+        )
+
+    prev_entries = competition_agent.load_latest_recommend_list(
+        conversation_id, session_factory=session_factory
+    )
+    # "상금 더 큰 거" 같은 상대 조건을 절대값으로 환산할 기준(직전 목록의 1등 상금 최댓값).
+    max_known_prize = max(
+        (e.get("first_prize_amount") or 0 for e in prev_entries), default=0
+    ) or None
+    user_msgs = [m.content for m in history if m.role == "user"]
+    search_keyword, filters = extract_keyword_and_filters(
+        user_msgs, max_known_prize=max_known_prize
+    )
+    # "다른/비슷한 거 보여줘" 재검색이면 직전에 보여준 공모전은 결과에서 제외한다.
+    exclude_ids = (
+        [e["id"] for e in prev_entries]
+        if prev_entries
+        and any(k in last_user_msg for k in ("다른", "비슷", "말고"))
+        else None
+    )
     db_results: list | None = None  # role="recommend" 저장은 LLM 응답 생성 후 마지막에(경쟁조건 방지)
 
     if not search_keyword:
@@ -1155,13 +2392,20 @@ def _handle_recommend(
         )
     else:
         results = semantic_search(search_keyword, k=10)
-        results = _apply_filters(results, filters)[:5]
+        if exclude_ids:
+            results = [c for c in results if c.id not in exclude_ids]
+        results = apply_filters(results, filters)[:5]
 
         if not results:
-            results = search_competitions(keyword=None, open_only=True, filters=filters, limit=5)
+            results = search_competitions(
+                keyword=None, open_only=True, filters=filters,
+                exclude_ids=exclude_ids, limit=5,
+            )
 
         if results:
-            db_results = results
+            # 상세 정보가 있으면 상세 객체를 저장해, role="recommend" 기록(→ 프론트 카드)에
+            # 마감·상금·카테고리까지 실리게 한다.
+            db_results = []
             tool_context = (
                 "\n\n[검색 결과 - 아래 목록만 사용하고 없는 공모전은 절대 만들지 마세요. "
                 "각 항목 앞의 번호를 그대로 답변에도 순서대로 남기세요(1. 2. 3. ...). "
@@ -1169,6 +2413,7 @@ def _handle_recommend(
             )
             for i, c in enumerate(results, start=1):
                 detail = get_competition_detail(c.id)
+                db_results.append(detail or c)
                 if detail:
                     deadline = f"마감: {detail.deadline}" if detail.deadline else ""
                     categories = ", ".join(detail.category[:3])
@@ -1221,13 +2466,14 @@ def _handle_recommend(
    요구사항이 충분히 파악된 경우에만 아래 [검색 결과]를 활용해 추천하세요.
    검색 결과에 없는 공모전은 절대 만들어내지 마세요.
 
+{STYLE_GUIDE}
+
 [답변 형식 규칙]
-- 실제 정보를 전달할 때(공모전 목록, 계획, 팁 등 여러 항목)만 아래 구조를 사용하세요.
-- 여러 항목은 각각 <details><summary>제목</summary>내용</details> 형식으로 접을 수 있게 만드세요.
-- 전체 요약은 <details> 밖에 2~3문장으로 먼저 쓰세요.
-- 마크다운(**, ##, -)도 함께 사용 가능합니다.
-- [검색 결과]에 번호가 매겨진 공모전은 그 번호를 "1. 공모전명"처럼 그대로 답변에 남기세요.
-  내부 고유번호(id)는 어떤 형태로도 사용자에게 보여주면 안 됩니다.
+- [검색 결과]가 있을 때: 마감·상금·자격 같은 상세 정보는 화면에 카드로 함께 표시되므로
+  답변에서 반복하지 마세요. 왜 이 목록을 골랐는지 1~2문장으로 말한 뒤, 각 항목을
+  "1. 공모전명 — 이 사용자에게 맞는 이유 한 줄" 형태로만 쓰세요(번호는 [검색 결과]의
+  번호 그대로). 내부 고유번호(id)는 어떤 형태로도 사용자에게 보여주면 안 됩니다.
+- 마지막은 사용자의 선택을 묻는 질문 1개로 마치세요(예: 더 자세히 볼 항목, 조건 변경 여부).
 - 아래 [대화 기록] 뒤에 실제 [검색 결과]/[웹 검색 결과] 블록이 없다면, 번호가 매겨진
   공모전 목록을 절대로 스스로 만들어내지 마세요. 검색이 아직 안 됐거나 결과가 없다는
   사실을 그대로 말하고, 필요한 정보(분야/참여형태/목표 등)를 물어보세요.
@@ -1261,7 +2507,10 @@ def _handle_progress(
 ) -> str:
     workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
     if workspace_id is None:
-        return "이 대화는 아직 워크스페이스에 연결돼 있지 않아요. 먼저 워크스페이스를 만들어 주세요."
+        return (
+            "아직 연결된 워크스페이스가 없어요. "
+            "공모전을 정해 워크스페이스부터 만들면 이어서 도와드릴 수 있어요 — 준비 중인 공모전이 있나요?"
+        )
 
     result = evaluate_progress(
         workspace_id, user_id, session_factory=session_factory, tools=tools, llm=llm
@@ -1284,7 +2533,10 @@ def _handle_report(
     """
     workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
     if workspace_id is None:
-        return "이 대화는 아직 워크스페이스에 연결돼 있지 않아요. 먼저 워크스페이스를 만들어 주세요."
+        return (
+            "아직 연결된 워크스페이스가 없어요. "
+            "공모전을 정해 워크스페이스부터 만들면 이어서 도와드릴 수 있어요 — 준비 중인 공모전이 있나요?"
+        )
     report = weekly_report(workspace_id, session_factory=session_factory)
     body = format_weekly_report(report)
 
@@ -1336,7 +2588,10 @@ def _handle_team_status(
     """
     workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
     if workspace_id is None:
-        return "이 대화는 아직 워크스페이스에 연결돼 있지 않아요. 먼저 워크스페이스를 만들어 주세요."
+        return (
+            "아직 연결된 워크스페이스가 없어요. "
+            "공모전을 정해 워크스페이스부터 만들면 이어서 도와드릴 수 있어요 — 준비 중인 공모전이 있나요?"
+        )
 
     if session_factory is None:
         session_factory = _default_session_factory()
@@ -1394,7 +2649,10 @@ def _handle_risk_check(
     """
     workspace_id = _load_workspace_id(conversation_id, session_factory=session_factory)
     if workspace_id is None:
-        return "이 대화는 아직 워크스페이스에 연결돼 있지 않아요. 먼저 워크스페이스를 만들어 주세요."
+        return (
+            "아직 연결된 워크스페이스가 없어요. "
+            "공모전을 정해 워크스페이스부터 만들면 이어서 도와드릴 수 있어요 — 준비 중인 공모전이 있나요?"
+        )
 
     report = weekly_report(workspace_id, session_factory=session_factory)
     graded = [m for m in report["members"] if m["total"] > 0]

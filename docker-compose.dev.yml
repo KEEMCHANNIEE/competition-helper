@@ -76,6 +76,11 @@ services:
       context: .
       dockerfile: deploy/docker/worker.Dockerfile
     restart: unless-stopped
+    # 워커는 stateless(상태는 전부 App DB) + brpop 큐 소비라 복제가 안전하다.
+    # 1개면 LLM 턴(10~30초)이 직렬화돼, 여러 명이 동시에 말할 때 뒷사람의
+    # 프론트 폴링(45초)이 타임아웃될 수 있어 3개로 병렬 처리한다.
+    deploy:
+      replicas: 3
     volumes:
       - ./services/worker/src:/app/services/worker/src
       - ./libs/contest_helper_core/src:/app/libs/contest_helper_core/src

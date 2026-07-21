@@ -62,6 +62,26 @@ def test_get_chat_not_pending_after_assistant_reply(client, db_session):
     assert body["messages"][-1]["role"] == "assistant"
 
 
+def test_get_chat_still_pending_when_internal_role_is_last(client, db_session):
+    """recommend 같은 내부 기록이 assistant 답변보다 먼저 저장돼도 pending 이 유지된다."""
+    from contest_helper_core.models import Message
+
+    conv_id = client.post("/chat", json={"message": "공모전 추천해줘"}).json()[
+        "conversation_id"
+    ]
+    db_session.add(
+        Message(conversation_id=conv_id, role="recommend", content="[]")
+    )
+    db_session.commit()
+
+    body = client.get(f"/chat/{conv_id}").json()
+    assert body["pending"] is True  # 아직 assistant 답변이 없다
+
+    db_session.add(Message(conversation_id=conv_id, role="assistant", content="답변"))
+    db_session.commit()
+    assert client.get(f"/chat/{conv_id}").json()["pending"] is False
+
+
 def test_get_chat_missing_conversation_404(client):
     assert client.get("/chat/9999").status_code == 404
 
