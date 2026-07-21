@@ -16,10 +16,6 @@ from __future__ import annotations
 import json
 
 import pytest
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
-
 from contest_helper_core.models import (
     Conversation,
     Message,
@@ -29,6 +25,9 @@ from contest_helper_core.models import (
     WorkspaceMember,
 )
 from contest_helper_core.schemas import MessageOut
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 from worker import agent
 from worker.mcp_tools import tasks as tasks_tool
 from worker.mcp_tools.competitions import CompetitionDetailOut, CompetitionSearchFilters
@@ -122,8 +121,11 @@ def test_extract_contest_resolves_spaced_ordinal(session_factory):
         session.commit()
         conv_id = conv.id
 
-    assert agent._extract_contest("두 번째 걸로 할게", conv_id, session_factory=session_factory)[:2] == (22, "디자인 공모전")
-    assert agent._extract_contest("세 번째 거로 하자", conv_id, session_factory=session_factory)[:2] == (33, "마케팅 공모전")
+    result_second = agent._extract_contest("두 번째 걸로 할게", conv_id, session_factory=session_factory)
+    assert result_second[:2] == (22, "디자인 공모전")
+
+    result_third = agent._extract_contest("세 번째 거로 하자", conv_id, session_factory=session_factory)
+    assert result_third[:2] == (33, "마케팅 공모전")
 
 
 def test_recommend_asks_prep_period_before_researching(session_factory, workspace_conv):

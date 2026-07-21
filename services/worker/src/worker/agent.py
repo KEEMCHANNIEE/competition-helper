@@ -66,7 +66,6 @@ from worker.mcp_tools.competitions import (
     search_competitions,
 )
 from worker.mcp_tools.registry import build_registry
-from worker.search_filters import apply_filters, extract_keyword_and_filters
 from worker.mcp_tools.web_search import web_search
 from worker.progress_agent import (
     evaluate_progress,
@@ -74,6 +73,7 @@ from worker.progress_agent import (
     weekly_report,
 )
 from worker.rag import semantic_search
+from worker.search_filters import apply_filters, extract_keyword_and_filters
 from worker.style import STYLE_GUIDE
 
 # 의도 분류는 LLM(GeminiClient.generate)이 담당한다. 이 키워드 dict 는 LLM 호출이
@@ -2111,7 +2111,7 @@ def _handle_taskdone(
     )
 
 
-def _best_matching_task(text: str, tasks: list) -> tuple["Task | None", int]:
+def _best_matching_task(text: str, tasks: list) -> tuple[Task | None, int]:
     """로그 내용과 제목이 가장 많이 겹치는 todo Task 와 겹친 단어 수를 반환한다.
 
     겹침 판단(자동 완료/되묻기/무시)은 호출부 몫이라 점수를 함께 돌려준다.

@@ -10,10 +10,6 @@ from __future__ import annotations
 import json
 
 import pytest
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
-
 from contest_helper_core.models import (
     Conversation,
     Message,
@@ -22,6 +18,9 @@ from contest_helper_core.models import (
     Workspace,
     WorkspaceMember,
 )
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 from worker import agent
 
 

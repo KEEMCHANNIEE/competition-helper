@@ -127,7 +127,7 @@ def client(engine, test_user, fake_redis, fake_repo):
     fastapi_app.dependency_overrides[get_redis] = lambda: fake_redis
     fastapi_app.dependency_overrides[get_competition_repo] = lambda: fake_repo
 
-    with TestClient(fastapi_app) as c:
+    with TestClient(fastapi_app, base_url="http://testserver/api") as c:
         yield c
 
     fastapi_app.dependency_overrides.clear()

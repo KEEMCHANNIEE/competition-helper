@@ -62,7 +62,8 @@ def extract_keyword_and_filters(
 아래 JSON 스키마에 맞춰, 사용자가 명시적으로 언급한 조건만 채우고 언급 안 된 필드는
 반드시 null 로 두세요. 설명이나 코드블록 없이 JSON 객체 하나만 출력하세요.
 
-오늘 날짜: {today} (마감일 관련 상대 표현("이번 주까지", "준비 기간 3주 필요" 등)은 이 날짜 기준으로 계산하세요){prize_context}
+오늘 날짜: {today} (마감일 관련 상대 표현("이번 주까지", "준비 기간 3주 필요" 등)은
+이 날짜 기준으로 계산하세요){prize_context}
 
 중요: 이전 발언에서 파악된 조건·키워드는 기본으로 유지하세요. 최신 발언이 이전 조건과
 명백히 충돌하거나("다른 분야도 보여줘", "말고 다른 거", "그거 말고" 등) 새 조건을
@@ -76,7 +77,8 @@ def extract_keyword_and_filters(
   "category": ["분야1", "분야2"] 또는 null,     // 반드시 다음 중에서만 골라라: {category_options}
   "target": ["대학생", "일반인"] 또는 null,      // 반드시 다음 중에서만 골라라: {target_options}
   "has_prize": true, false, 또는 null,          // 금액과 상관없이 "상금이 있는지"만 물었으면 true
-  "min_prize": 정수 또는 null,                  // 구체적 최소 금액을 말했거나, 상대 표현("더 큰")을 위 기준값으로 환산할 수 있을 때
+  "min_prize": 정수 또는 null,                  // 구체적 최소 금액을 말했거나,
+  상대 표현("더 큰")을 위 기준값으로 환산할 수 있을 때
   "participation_type": "individual" 또는 "team" 또는 null,
   "is_career_benefit": true, false, 또는 null,  // 취업·인턴 연계를 원한다고 했으면
   "deadline_before": "YYYY-MM-DD" 또는 null,     // 이 날짜 전 마감만 원하면(상대 표현은 오늘 날짜 기준 환산)

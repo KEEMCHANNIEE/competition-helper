@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import pytest
+from contest_helper_core.models import User, Workspace, WorkspaceMember
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
-
-from contest_helper_core.models import User, Workspace, WorkspaceMember
 from worker import team_fit
 
 

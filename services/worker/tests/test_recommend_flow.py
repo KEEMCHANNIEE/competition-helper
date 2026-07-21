@@ -12,12 +12,11 @@ import json
 from datetime import date
 
 import pytest
+from contest_helper_core.models import Conversation, Message, User
+from contest_helper_core.schemas import MessageOut
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
-
-from contest_helper_core.models import Conversation, Message, User
-from contest_helper_core.schemas import MessageOut
 from worker import agent
 from worker.mcp_tools.competitions import CompetitionDetailOut, CompetitionSearchFilters
 

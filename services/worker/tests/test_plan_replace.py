@@ -8,10 +8,6 @@ LLM 실패 시엔 기존 계획을 지우지 않아야 한다.
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
-
 from contest_helper_core.models import (
     Conversation,
     Message,
@@ -20,6 +16,9 @@ from contest_helper_core.models import (
     Workspace,
     WorkspaceMember,
 )
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 from worker import agent
 from worker.mcp_tools import tasks as tasks_tool
 
