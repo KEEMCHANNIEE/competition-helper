@@ -8,9 +8,11 @@
 #     빌드 도구(node, node_modules)는 최종 이미지에 포함되지 않아 매우 가볍다.
 #
 # ★ 빌드 컨텍스트 주의 ★
-#   web 은 파이썬 워크스페이스와 무관하므로 컨텍스트를 services/web 으로 잡는 게 간단하다.
-#       docker build -f deploy/docker/web.Dockerfile -t contest-helper-web services/web
-#   (compose 에서는 build.context: ../services/web 으로 지정)
+#   nginx.conf 를 deploy/docker/ 에서 COPY 해야 하므로, 컨텍스트는 api/worker 와
+#   똑같이 "레포 루트" 여야 한다(services/web 를 컨텍스트로 잡으면 nginx.conf 가 안 보임).
+#       docker build -f deploy/docker/web.Dockerfile -t contest-helper-web .
+#                                                                        ^ 마지막 점(.) = 컨텍스트 = 레포 루트
+#   (compose 에서는 build.context: .. 로 지정)
 # =============================================================================
 
 # ----- 1단계(build): node 로 프론트엔드 정적 산출물 생성 -----
@@ -20,12 +22,12 @@ WORKDIR /app
 
 # package.json/lock 만 먼저 복사 → 의존성 레이어 캐시 활용
 #   (소스만 바뀌면 npm ci 를 다시 안 해도 됨 = 빌드 빨라짐)
-COPY package*.json ./
+COPY services/web/package*.json ./
 # npm ci: lockfile 기준으로 정확히 설치(재현 가능). lock 이 없으면 npm install 로 바꿀 것.
 RUN npm ci
 
 # 나머지 소스 복사 후 빌드. Vite 는 기본적으로 dist/ 에 결과물을 만든다.
-COPY . .
+COPY services/web/ .
 RUN npm run build
 
 # ----- 2단계(serve): nginx 로 정적 파일 서빙 -----

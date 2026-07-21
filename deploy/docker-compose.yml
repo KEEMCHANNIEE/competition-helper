@@ -137,12 +137,8 @@ services:
   # ---------------------------------------------------------------------------
   web:
     build:
-      context: ../services/web         # ★ web 은 파이썬 워크스페이스와 무관 → web 폴더가 컨텍스트
-      dockerfile: ../../deploy/docker/web.Dockerfile
-      # 주의: web.Dockerfile 안에서 deploy/docker/nginx.conf 를 COPY 하므로,
-      #       컨텍스트가 services/web 이면 그 경로가 안 보인다.
-      #       → 실제로는 컨텍스트를 레포 루트(..)로 두고 빌드하는 편이 더 안전하다.
-      #       services/web 이 아직 없다면 이 web 서비스는 주석 처리하고 나중에 활성화할 것.
+      context: ..                      # ★ 레포 루트 컨텍스트(nginx.conf COPY 때문에 필수)
+      dockerfile: deploy/docker/web.Dockerfile
     ports:
       - "5173:80"   # 브라우저에서 http://localhost:5173 으로 접속
     depends_on:
