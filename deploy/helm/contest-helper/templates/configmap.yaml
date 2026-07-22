@@ -16,6 +16,5 @@ metadata:
     {{- include "contest-helper.labels" . | nindent 4 }}
 data:
   {{- range $key, $val := .Values.config }}
-  # tpl: 값 안의 {{ ... }} 까지 렌더링(예: 릴리스명 기반 redis 호스트)
   {{ $key }}: {{ $val | quote }}
   {{- end }}
