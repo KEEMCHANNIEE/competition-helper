@@ -17,5 +17,5 @@ metadata:
 data:
   {{- range $key, $val := .Values.config }}
   # tpl: 값 안의 {{ ... }} 까지 렌더링(예: 릴리스명 기반 redis 호스트)
-  {{ $key }}: {{ tpl (toString $val) $ | quote }}
+  {{ $key }}: {{ $val | quote }}
   {{- end }}
