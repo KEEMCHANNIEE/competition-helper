@@ -70,7 +70,7 @@ config:
   VERTEX_LOCATION: "us-central1"
   GOOGLE_CLOUD_PROJECT: ""            # Vertex 경로 쓸 때 채움(프로젝트 ID 는 비밀 아님)
   GOOGLE_OAUTH_REDIRECT_URI: "https://conmate.xyz/api/auth/google/callback"
-  LANGFUSE_HOST: ""
+  LANGFUSE_HOST: "none"
   FRONTEND_URL: "https://conmate.xyz"
 
 # -----------------------------------------------------------------------------
