@@ -66,7 +66,7 @@ resources:
 # -----------------------------------------------------------------------------
 # 클러스터 내부 통신은 서비스 이름(redis, db)을 호스트로 쓴다.
 config:
-  REDIS_URL: "redis://{{ .Release.Name }}-redis:6379/0"
+  REDIS_URL: "redis://contest-helper-redis:6379/0"
   VERTEX_LOCATION: "us-central1"
   GOOGLE_CLOUD_PROJECT: ""            # Vertex 경로 쓸 때 채움(프로젝트 ID 는 비밀 아님)
   GOOGLE_OAUTH_REDIRECT_URI: "https://conmate.xyz/api/auth/google/callback"
