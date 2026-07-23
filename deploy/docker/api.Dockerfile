@@ -36,11 +36,12 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 WORKDIR /app
 
 # ----- 워크스페이스 인식 복사: 루트 pyproject + 공유 lib + api 서비스 -----
-# uv workspace 가 의존성 그래프를 풀려면 이 3개가 모두 필요하다.
+# uv workspace 가 의존성 그래프를 풀려면 이 4개가 모두 필요하다.
 #   1) 루트 pyproject.toml  → [tool.uv.workspace] members 정의가 들어있음
-#   2) libs/contest_helper_core/    → api 가 의존하는 공유 계약 계층
-#   3) services/api/        → 실제 우리가 빌드할 서비스
-COPY pyproject.toml ./
+#   2) uv.lock              → --frozen 이 참조할 잠금 파일(빠뜨리면 "Unable to find lockfile" 에러)
+#   3) libs/contest_helper_core/    → api 가 의존하는 공유 계약 계층
+#   4) services/api/        → 실제 우리가 빌드할 서비스
+COPY pyproject.toml uv.lock ./
 COPY libs/contest_helper_core/ libs/contest_helper_core/
 COPY services/api/ services/api/
 

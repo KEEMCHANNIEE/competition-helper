@@ -24,9 +24,9 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
 
-# 워크스페이스 인식 복사: 루트 pyproject + 공유 lib + worker 서비스.
+# 워크스페이스 인식 복사: 루트 pyproject + lock + 공유 lib + worker 서비스.
 #   (api 와 동일한 이유 — uv workspace 가 contest-helper-core 를 로컬 멤버로 풀어야 함)
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock ./
 COPY libs/contest_helper_core/ libs/contest_helper_core/
 COPY services/worker/ services/worker/
 
