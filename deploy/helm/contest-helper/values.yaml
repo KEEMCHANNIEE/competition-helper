@@ -50,10 +50,10 @@ replicaCount:
 resources:
   api:
     requests: { cpu: "100m", memory: "256Mi" }
-    limits:   { cpu: "500m", memory: "512Mi" }
+    limits:   { cpu: "500m", memory: "1024Mi" }
   worker:
     requests: { cpu: "100m", memory: "256Mi" }
-    limits:   { cpu: "500m", memory: "512Mi" }
+    limits:   { cpu: "500m", memory: "1024Mi" }
   web:
     requests: { cpu: "50m", memory: "64Mi" }
     limits:   { cpu: "200m", memory: "128Mi" }
