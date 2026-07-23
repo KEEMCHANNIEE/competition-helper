@@ -2,9 +2,9 @@ import { useState, useEffect } from "react";
 
 // 401 이면 구글 로그인으로. (Chat/Workspace 와 동일 규약)
 async function apiFetch(path, options = {}) {
-  const res = await fetch(path, { credentials: "include", ...options });
+  const res = await fetch(`/api${path}`, { credentials: "include", ...options });
   if (res.status === 401) {
-    window.location.href = "/auth/google/login";
+    window.location.href = "/api/auth/google/login";
     return null;
   }
   if (!res.ok) return null;
@@ -12,7 +12,7 @@ async function apiFetch(path, options = {}) {
 }
 
 async function postJSON(path, body) {
-  return fetch(path, {
+  return fetch(`/api${path}`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },

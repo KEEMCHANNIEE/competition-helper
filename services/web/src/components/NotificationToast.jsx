@@ -9,7 +9,7 @@ export default function NotificationToast() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch("/notifications", { credentials: "include" });
+        const res = await fetch("/api/notifications", { credentials: "include" });
         if (res.ok) setItems(await res.json());
       } catch { /* 무시 */ }
     })();
@@ -18,7 +18,7 @@ export default function NotificationToast() {
   async function dismissAll() {
     setItems([]);
     try {
-      await fetch("/notifications/read", { method: "POST", credentials: "include" });
+      await fetch("/api/notifications/read", { method: "POST", credentials: "include" });
     } catch { /* 무시 */ }
   }
 

@@ -15,9 +15,9 @@ import "../styles/workspace.css";
 
 // --- API 헬퍼 (Chat.jsx 와 동일 규약: 세션 쿠키 포함, 401 이면 로그인으로) ---
 async function apiFetch(path) {
-  const res = await fetch(path, { credentials: "include" });
+  const res = await fetch(`/api${path}`, { credentials: "include" });
   if (res.status === 401) {
-    window.location.href = "/auth/google/login";
+    window.location.href = "/api/auth/google/login";
     return null;
   }
   if (!res.ok) return null;
@@ -153,7 +153,7 @@ export default function Workspace({ onGoToChat, onStartTaskChat, active = true }
   const [generatingReport, setGeneratingReport] = useState(false);
 
   async function handleSwitch(userId) {
-    await fetch("/auth/dev/switch", {
+    await fetch("/api/auth/dev/switch", {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
@@ -173,7 +173,7 @@ export default function Workspace({ onGoToChat, onStartTaskChat, active = true }
     if (!wsId || generatingReport) return;
     setGeneratingReport(true);
     try {
-      await fetch(`/workspaces/${wsId}/weekly-report`, {
+      await fetch(`/api/workspaces/${wsId}/weekly-report`, {
         method: "POST",
         credentials: "include",
       });
@@ -186,7 +186,7 @@ export default function Workspace({ onGoToChat, onStartTaskChat, active = true }
 
   async function handleSetupDemo() {
     if (!wsId) return;
-    await fetch(`/workspaces/${wsId}/demo-team`, {
+    await fetch(`/api/workspaces/${wsId}/demo-team`, {
       method: "POST",
       credentials: "include",
     });
@@ -269,7 +269,7 @@ export default function Workspace({ onGoToChat, onStartTaskChat, active = true }
 
     if (!isReal || !wsId) return; // mock 워크스페이스는 화면 상태만 바꾸고 끝.
     try {
-      const res = await fetch(`/workspaces/${wsId}/tasks/${id}`, {
+      const res = await fetch(`/api/workspaces/${wsId}/tasks/${id}`, {
         method: "PATCH",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -292,7 +292,7 @@ export default function Workspace({ onGoToChat, onStartTaskChat, active = true }
     }
     const matchedMember = members.find((m) => m.name === newTask.assignee);
     try {
-      const res = await fetch(`/workspaces/${wsId}/tasks`, {
+      const res = await fetch(`/api/workspaces/${wsId}/tasks`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },

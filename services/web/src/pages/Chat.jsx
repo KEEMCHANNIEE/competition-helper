@@ -10,9 +10,9 @@ const SUGGESTED = [
 ];
 
 async function apiFetch(path, options = {}) {
-  const res = await fetch(path, { credentials: "include", ...options });
+  const res = await fetch(`/api${path}`, { credentials: "include", ...options });
   if (res.status === 401) {
-    window.location.href = "/auth/google/login";
+    window.location.href = "/api/auth/google/login";
     return null;
   }
   return res;
