@@ -30,10 +30,8 @@ COPY pyproject.toml ./
 COPY libs/contest_helper_core/ libs/contest_helper_core/
 COPY services/worker/ services/worker/
 
-# 의존성 설치.
-#   uv.lock 미생성 가능성 때문에 --frozen 대신 일반 sync 사용.
-#   uv lock 을 커밋한 뒤에는 `--frozen` 을 추가해 재현성 확보.
-RUN uv sync --no-dev --package contest-helper-worker
+# 의존성 설치. uv.lock 이 커밋돼 있으므로 --frozen 으로 재현 가능한 빌드를 보장한다.
+RUN uv sync --frozen --no-dev --package contest-helper-worker
 
 # worker 패키지 루트에서 실행(작업 디렉터리 정리 목적).
 WORKDIR /app/services/worker

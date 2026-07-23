@@ -45,12 +45,10 @@ COPY libs/contest_helper_core/ libs/contest_helper_core/
 COPY services/api/ services/api/
 
 # ----- 의존성 설치 -----
-# uv.lock 이 아직 생성되지 않았을 수 있으므로 --frozen 을 쓰지 않는다.
+#   --frozen   : uv.lock 을 그대로 신뢰하고 재해석하지 않음(재현 가능한 빌드, lock 이 이미 커밋돼 있음)
 #   --no-dev   : 테스트/린트 같은 개발 의존성 제외(운영 이미지를 가볍게)
 #   --package  : 워크스페이스 중 api 패키지(+그 의존 contest-helper-core)만 설치
-# ※ 한 번이라도 `uv lock` 을 돌려 uv.lock 을 커밋한 뒤에는,
-#   재현 가능한 빌드를 위해 아래 줄을 `uv sync --no-dev --frozen --package contest-helper-api` 로 바꿀 것.
-RUN uv sync --no-dev --package contest-helper-api
+RUN uv sync --frozen --no-dev --package contest-helper-api
 
 # FastAPI 가 듣는 포트(문서/메타 용도. 실제 노출은 compose/helm 에서 매핑).
 EXPOSE 8000
@@ -64,4 +62,7 @@ WORKDIR /app/services/api
 #       `CREATE EXTENSION IF NOT EXISTS vector` 를 반드시 수행해야 한다(주의).
 # 2) uvicorn app.main:app : 마이그레이션 성공 후에야 API 서버 기동
 #    (&& 로 연결 → 마이그레이션 실패 시 서버를 띄우지 않음)
-CMD ["sh", "-c", "uv run alembic upgrade head && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+# ★ --frozen --no-dev --package 를 빌드 단계와 동일하게 맞춰야 한다 ★
+#   빠뜨리면 `uv run` 이 dev 의존성(ruff 등)까지 포함해 매 기동마다 재동기화를
+#   시도하며 네트워크로 패키지를 새로 받아, readiness 타임아웃을 넘겨버린다.
+CMD ["sh", "-c", "uv run --frozen --no-dev --package contest-helper-api alembic upgrade head && uv run --frozen --no-dev --package contest-helper-api uvicorn app.main:app --host 0.0.0.0 --port 8000"]
