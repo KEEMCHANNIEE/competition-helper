@@ -37,10 +37,14 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    # connect_timeout: DB 호스트에 닿지 못할 때(방화벽/Authorized networks 차단 등)
+    # 조용히 무한 대기하지 않고 5초 뒤 명확한 에러로 실패하게 한다. 이렇게 해야
+    # 파드가 침묵 속에 죽으며 재시작을 반복하는 대신, 로그에 실제 원인이 찍힌다.
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args={"connect_timeout": 5},
     )
     with connectable.connect() as connection:
         context.configure(
