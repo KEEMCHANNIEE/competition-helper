@@ -18,6 +18,10 @@ metadata:
     app.kubernetes.io/component: api
 spec:
   replicas: {{ .Values.replicaCount.api }}
+  # 작은 클러스터라 롤링 업데이트에 필요한 서지(surge) 여유 리소스가 없다.
+  # Recreate 로 기존 파드를 먼저 내리고 새 파드를 띄운다(배포 중 잠깐 다운타임 발생).
+  strategy:
+    type: Recreate
   selector:
     # 이 Deployment 가 관리할 Pod 를 고르는 라벨(아래 template.labels 와 일치해야 함)
     matchLabels:
