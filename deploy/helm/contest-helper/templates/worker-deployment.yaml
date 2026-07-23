@@ -19,11 +19,15 @@ metadata:
     app.kubernetes.io/component: worker
 spec:
   replicas: {{ .Values.replicaCount.worker }}
-  # 작은 클러스터라 롤링 업데이트에 필요한 서지(surge) 여유 리소스가 없다.
-  # Recreate 로 기존 파드를 먼저 내리고 새 파드를 띄운다(배포 중 잠깐 다운타임 발생).
+  # 작은 클러스터라 서지(surge) 여유 리소스가 없다. maxSurge:0 으로 새 파드를
+  # 추가로 띄우지 않고, maxUnavailable:1 로 기존 파드부터 내린 뒤 새 파드를
+  # 띄운다(배포 중 잠깐 다운타임 발생). type 은 RollingUpdate 로 유지해야
+  # 기존 오브젝트와의 strategy 필드 충돌(Recreate 전환 시 SSA 검증 실패)을 피한다.
   strategy:
-    type: Recreate
-    rollingUpdate: null
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
   selector:
     matchLabels:
       {{- include "contest-helper.selectorLabels" (dict "ctx" . "component" "worker") | nindent 6 }}
