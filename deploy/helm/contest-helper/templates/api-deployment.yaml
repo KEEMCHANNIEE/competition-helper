@@ -40,12 +40,10 @@ spec:
         - name: api
           image: "{{ .Values.image.api.repository }}:{{ .Values.image.api.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          # ★ 기동 명령: 마이그레이션 → uvicorn (docker-compose 와 동일 패턴) ★
-          #   alembic.ini 가 있는 services/api 폴더에서 실행한다.
+          # 기동 명령은 api.Dockerfile 의 CMD 를 그대로 쓴다(여기서 command/args 로
+          # 덮어쓰지 않는다). 예전엔 여기 command/args 가 하드코딩돼 있어서 Dockerfile
+          # 의 CMD 를 아무리 고쳐도 실제로는 반영되지 않는 문제가 있었다.
           workingDir: /app/services/api
-          command: ["sh", "-c"]
-          args:
-            - "uv run alembic upgrade head && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"
           ports:
             - name: http
               containerPort: 8000
