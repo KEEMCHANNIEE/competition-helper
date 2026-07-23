@@ -63,7 +63,8 @@ WORKDIR /app/services/api
 #       `CREATE EXTENSION IF NOT EXISTS vector` 를 반드시 수행해야 한다(주의).
 # 2) uvicorn app.main:app : 마이그레이션 성공 후에야 API 서버 기동
 #    (&& 로 연결 → 마이그레이션 실패 시 서버를 띄우지 않음)
-# ★ --frozen --no-dev --package 를 빌드 단계와 동일하게 맞춰야 한다 ★
-#   빠뜨리면 `uv run` 이 dev 의존성(ruff 등)까지 포함해 매 기동마다 재동기화를
-#   시도하며 네트워크로 패키지를 새로 받아, readiness 타임아웃을 넘겨버린다.
-CMD ["sh", "-c", "uv run --frozen --no-dev --package contest-helper-api alembic upgrade head && uv run --frozen --no-dev --package contest-helper-api uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+# ★ `uv run` 을 쓰지 않고 빌드 단계에서 만든 .venv 의 실행 파일을 절대경로로 직접 호출한다 ★
+#   `uv run` 은 워크스페이스 안에서는 --frozen --no-dev --package 를 다 줘도 매 기동마다
+#   ruff/pygments 같은 걸 다시 받아오며 재동기화를 시도해 readiness 타임아웃을 넘겨버렸다.
+#   .venv 는 이미 완성돼 있으니 uv 를 거치지 않고 바로 그 안의 바이너리를 실행하면 된다.
+CMD ["sh", "-c", "/app/.venv/bin/alembic upgrade head && /app/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000"]
