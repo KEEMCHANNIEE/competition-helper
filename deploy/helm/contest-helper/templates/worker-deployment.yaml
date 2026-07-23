@@ -23,6 +23,7 @@ spec:
   # Recreate 로 기존 파드를 먼저 내리고 새 파드를 띄운다(배포 중 잠깐 다운타임 발생).
   strategy:
     type: Recreate
+    rollingUpdate: null
   selector:
     matchLabels:
       {{- include "contest-helper.selectorLabels" (dict "ctx" . "component" "worker") | nindent 6 }}

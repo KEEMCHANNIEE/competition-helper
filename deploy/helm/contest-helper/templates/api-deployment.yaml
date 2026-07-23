@@ -22,6 +22,7 @@ spec:
   # Recreate 로 기존 파드를 먼저 내리고 새 파드를 띄운다(배포 중 잠깐 다운타임 발생).
   strategy:
     type: Recreate
+    rollingUpdate: null
   selector:
     # 이 Deployment 가 관리할 Pod 를 고르는 라벨(아래 template.labels 와 일치해야 함)
     matchLabels:
